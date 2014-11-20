@@ -3,18 +3,6 @@ import argparse
 import psana
 import numpy as np
 
-
-def connectToDataSource(dataSource, verbose=False):
-    if ':idx' not in dataSource:
-        dataSource += ':idx'
-    ds = psana.DataSource(dataSource)
-    if verbose:
-        print 'Connected to data source {}.'.format(dataSource)
-
-    run = ds.runs().next()
-    return run
-
-
 # A command line parser
 def parseCmdline():
     "Function used to parse the commahd line."
@@ -61,6 +49,17 @@ def parseCmdline():
 
     return parser.parse_args()
 
+
+def connectToDataSource(dataSource, verbose=False):
+    if ':idx' not in dataSource:
+        dataSource += ':idx'
+    ds = psana.DataSource(dataSource)
+    if verbose:
+        print 'Connected to data source {}.'.format(dataSource)
+
+    run = ds.runs().next()
+    return ds, run
+
  
 def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
     # If a data source is given
@@ -68,7 +67,7 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
         if verbose:
             print 'Data source given.'
         # Simply connect
-        run = connectToDataSource(dataSource, verbose)
+        ds, run = connectToDataSource(dataSource, verbose)
 
         # and make a new hdf5 file. Overwriting any old file.
         hFile = h5py.File(hdf5FileName, 'w')
@@ -104,10 +103,10 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
             print 'Get data source from hdf5 file.'
         args.dataSource = hFile.attrs.get('dataSource')
         # and connect
-        run = connectToDataSource(args.dataSource, verbose)
+        ds, run = connectToDataSource(args.dataSource, verbose)
 
 
-    return run, hFile
+    return ds, run, hFile
 
 
 def makeDatasets(hFile, dataSets):
@@ -139,7 +138,7 @@ if __name__ == '__main__':
         print 'Argumets are:'
         print repr(args)
 
-    run, hFile = setupFiles(args.dataSource, args.hdf5File, args.numEvents,
+    ds, run, hFile = setupFiles(args.dataSource, args.hdf5File, args.numEvents,
             verbose)
 
     # Get information from the hdf5 file
