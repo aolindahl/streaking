@@ -1,7 +1,7 @@
 import psana
 import numpy as np
 
-def timeScaleFromDataSource(ds):
+def timeScaleFromDataSource(ds, source):
     '''Returnes time scale of aquiris trace from datasource object
     
     Returns None at failiure.
@@ -11,7 +11,8 @@ def timeScaleFromDataSource(ds):
 
     # Get the configuration
     try:
-        acqirisConfig = ds.env().configStore().get(psana.Acqiris.ConfigV1)
+        acqirisConfig = ds.env().configStore().get(psana.Acqiris.ConfigV1,
+                source)
     except:
         return None
         
@@ -36,5 +37,6 @@ if __name__ == '__main__':
     print 'Connecting to datasource'
     ds = psana.DataSource('exp=amoc8114:run=24')
 
+    tofSource = psana.Source('DetInfo(AmoETOF.0:Acqiris.0)')
     print 'Get time Scale'
-    timeScale = timeScaleFromDataSource(ds)
+    timeScale = timeScaleFromDataSource(ds, tofSource)

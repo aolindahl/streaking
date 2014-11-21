@@ -2,6 +2,12 @@ import h5py
 import argparse
 import psana
 import numpy as np
+import tof
+
+# Analysis configuration
+tofSource = psana.Source('DetInfo(AmoETOF.0:Acqiris.0)')
+timeSlice_us = [1.5, 1.7]
+
 
 # A command line parser
 def parseCmdline():
@@ -146,6 +152,12 @@ if __name__ == '__main__':
     N = hFile.attrs.get('numEvents')
     # Start time
     t0 = hFile.attrs.get('startTime_s')
+
+    # Get the time scale of the tof trace
+    timeScale_us = tof.timeScaleFromDataSource(ds)
+    timeSlice = slice( timeScale_us.searchsorted( np.min( timeSlice_us ) ),
+            timeScale_us.searchsorted( np.max( timeSlice_us ) ) )
+
 
     # Specify the datasets that should be avaliable for psana data
     eventDatasets = {
