@@ -7,7 +7,14 @@ psana = None
 
 # Analysis configuration
 tofSourceString = 'DetInfo(AmoETOF.0:Acqiris.0)'
+tofSource = None
 timeSlice_us = [1.5, 1.7]
+acqirisChannel = 1
+
+# name definitions
+fid = 'fiducial'
+evtTime = 'eventTime_s'
+rawTT = 'rawTimeTrace_V'
 
 
 # A command line parser
@@ -149,11 +156,12 @@ def psanaEnvDataDefinition(traceLength=None):
     return dataSets
 
 
-def psanaEventDataDefinition(numEvents=None):
+def psanaEventDataDefinition(numEvents=None, nSamples=None):
     # Specify the datasets that should be avaliable for psana data
     dataSets = {
-            'fiducial' : {'shape' : (numEvents,), 'dtype' : 'i'},
-            'eventTime': {'shape' : (numEvents,), 'dtype' : 'f'}
+            fid : {'shape' : (numEvents,), 'dtype' : 'i'},
+            evtTime : {'shape' : (numEvents,), 'dtype' : 'f'},
+            rawTT : {'shape' : (numEvents,  nSamples), 'dtype' : 'f'}
             }
     return dataSets
 
@@ -182,14 +190,28 @@ def getEnvData(hFile, ds, setNames):
 
 
 
-def getEventData(hFile, evt, setName, i, t_runStart):
+def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
 
-    if 'fiducial' in list(setName):
-        hFile['fiducial'][i] = evt.get(psana.EventId).fiducials()
+    names = list(setNames)
 
-    if 'eventTime' in list(setName):
+    if fid in names:
+        hFile[fid][i] = evt.get(psana.EventId).fiducials()
+        names.remove(fid)
+
+    if evtTime in names:
         time = evt.get(psana.EventId).time()
-        hFile['eventTime'][i] = time[0] + time[1]*1e-9 - t_runStart
+        hFile[evtTime][i] = time[0] + time[1]*1e-9 - t_runStart
+        names.remove(evtTime)
+
+    if rawTT in names:
+        hFile[rawTT][i,:] = -tof.rescaleToVolts(
+                tof.timeTraceFromEvent(evt, tofSourceString,
+                    acqirisChannel)[timeSlice], acqirisChannel)
+        names.remove(rawTT)
+
+    if len(names) > 0:
+        for name in names:
+            print '[WARNING]: Action for data set named "{}" not defined.'.format(name)
 
 #Running the snalysis
 if __name__ == '__main__':
@@ -216,7 +238,7 @@ if __name__ == '__main__':
     # Events to process
     N = hFile.attrs.get('numEvents')
     # Start time
-    t0 = hFile.attrs.get('startTime_s')
+    t_runStart = hFile.attrs.get('startTime_s')
 
     # Get the time scale of the tof trace
     timeScale_us = hFile['timeScale_us']
@@ -224,16 +246,20 @@ if __name__ == '__main__':
 
     # Make space for the events in the hdf5 file and get a list of empty data
     # sets
-    psanaEventDataSets = psanaEventDataDefinition(N)
+    psanaEventDataSets = psanaEventDataDefinition(N, len(timeScale_us))
     emptyEventDatasets = makeEventDatasets(hFile, psanaEventDataSets)
 
     if run is not None:
         # Get a list of the time objects to use
         times = run.times()[:N]
+        # setup the trace rescaling
+        tof.setupVoltageRescalingFronDataSource(ds, tofSourceString,
+                acqirisChannel)
         # go through the corresponding events
         for i, time in enumerate(times):
             evt = run.event(time)
-            getEventData(hFile, evt, psanaEventDataSets.keys(), i, t0)
+            getEventData(hFile, evt, psanaEventDataSets.keys(), i, t_runStart,
+                    timeSlice=timeSlice)
     
     # Close the hdf5 file
     hFile.close()
