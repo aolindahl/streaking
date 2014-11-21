@@ -1,11 +1,12 @@
 import h5py
 import argparse
-import psana
 import numpy as np
 import tof
 
+psana = None
+
 # Analysis configuration
-tofSource = psana.Source('DetInfo(AmoETOF.0:Acqiris.0)')
+tofSourceString = 'DetInfo(AmoETOF.0:Acqiris.0)'
 timeSlice_us = [1.5, 1.7]
 
 
@@ -57,6 +58,8 @@ def parseCmdline():
 
 
 def connectToDataSource(dataSource, verbose=False):
+    global psana
+    import psana
     if ':idx' not in dataSource:
         dataSource += ':idx'
     ds = psana.DataSource(dataSource)
@@ -103,19 +106,58 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
         hFile = h5py.File(args.hdf5File, 'r+')
         if verbose:
             print 'HDF5 file {} opened for read and write.'.format(hFile.filename)
-        
-        # Get the data source from the hdf5 file
+
+        # Check if any psana data are missing
         if verbose:
-            print 'Get data source from hdf5 file.'
-        args.dataSource = hFile.attrs.get('dataSource')
-        # and connect
-        ds, run = connectToDataSource(args.dataSource, verbose)
+            print 'Checking for psana data setds in the hdf5 file.'
+
+        # Flag for missing data sets
+        missing = False
+        # Get all the datasets that should be there
+        sets = psanaEnvDataDefinition()
+        sets.update( psanaEventDataDefinition() )
+        # Go through all the datasets
+        for set in sets:
+            # snd see of they are there
+            if set not in hFile.keys():
+                if verbose:
+                    print '"{}" is NOT there: PSANA needed.'.format(set)
+                missing = True
+                break
+            else:
+                if verbose:
+                    print '"{}" is there.'.format(set)
+
+        if missing:
+            # Get the data source from the hdf5 file
+            if verbose:
+                print 'Get data source from hdf5 file.'
+            args.dataSource = hFile.attrs.get('dataSource')
+            # and connect
+            ds, run = connectToDataSource(args.dataSource, verbose)
+        else:
+            de, run = None, None
 
 
     return ds, run, hFile
 
+def psanaEnvDataDefinition(traceLength=None):
+    # Specify environment data sets
+    dataSets = {
+            'timeScale_us' : {'shape' : (traceLength, ), 'dtype' : 'f'}
+            }
+    return dataSets
 
-def makeDatasets(hFile, dataSets):
+
+def psanaEventDataDefinition(numEvents=None):
+    # Specify the datasets that should be avaliable for psana data
+    dataSets = {
+            'fiducial' : {'shape' : (numEvents,), 'dtype' : 'i'},
+            'eventTime': {'shape' : (numEvents,), 'dtype' : 'f'}
+            }
+    return dataSets
+
+def makeEventDatasets(hFile, dataSets):
     emptyDatasets = []
     for set, spec in dataSets.iteritems():
         if set not in hFile:
@@ -123,14 +165,31 @@ def makeDatasets(hFile, dataSets):
             hFile.create_dataset(set, **spec)
     return emptyDatasets
 
-def getEventData(hFile, evt, setName, i, t0):
+def getEnvData(hFile, ds, setNames):
+    # Make sure the set names is in a list
+    setNames = list(setNames)
+
+    timeScale = 'timeScale_us'
+    if (timeScale in setNames) and (timeScale not in hFile.keys()):
+        # Get the time scale from the data
+        fullTimeScale_us = tof.timeScaleFromDataSource(ds, tofSourceString)
+        timeSlice = slice( fullTimeScale_us.searchsorted( np.min( timeSlice_us ) ),
+                fullTimeScale_us.searchsorted( np.max( timeSlice_us ) )
+                )
+        hFile.create_dataset(timeScale, data = fullTimeScale_us[timeSlice])
+        hFile.create_dataset('timeSlice',
+                data = np.array( [timeSlice.start, timeSlice.stop] ) )
+
+
+
+def getEventData(hFile, evt, setName, i, t_runStart):
 
     if 'fiducial' in list(setName):
         hFile['fiducial'][i] = evt.get(psana.EventId).fiducials()
 
     if 'eventTime' in list(setName):
         time = evt.get(psana.EventId).time()
-        hFile['eventTime'][i] = time[0] + time[1]*1e-9 - t0
+        hFile['eventTime'][i] = time[0] + time[1]*1e-9 - t_runStart
 
 #Running the snalysis
 if __name__ == '__main__':
@@ -147,32 +206,33 @@ if __name__ == '__main__':
     ds, run, hFile = setupFiles(args.dataSource, args.hdf5File, args.numEvents,
             verbose)
 
-    # Get information from the hdf5 file
+    # if the psana data is connected some data is missing.
+    # Go through the environement data
+    if ds is not None:
+        getEnvData(hFile, ds, psanaEnvDataDefinition())
+
+
+    # Get basic information from the hdf5 file
     # Events to process
     N = hFile.attrs.get('numEvents')
     # Start time
     t0 = hFile.attrs.get('startTime_s')
 
     # Get the time scale of the tof trace
-    timeScale_us = tof.timeScaleFromDataSource(ds)
-    timeSlice = slice( timeScale_us.searchsorted( np.min( timeSlice_us ) ),
-            timeScale_us.searchsorted( np.max( timeSlice_us ) ) )
+    timeScale_us = hFile['timeScale_us']
+    timeSlice = slice( *hFile['timeSlice'] )
 
-
-    # Specify the datasets that should be avaliable for psana data
-    eventDatasets = {
-            'fiducial' : {'shape' : (N,), 'dtype' : 'i'},
-            'eventTime': {'shape' : (N,), 'dtype' : 'f'}
-            }
-
-    emptyEventDatasets = makeDatasets(hFile, eventDatasets)
+    # Make space for the events in the hdf5 file and get a list of empty data
+    # sets
+    psanaEventDataSets = psanaEventDataDefinition(N)
+    emptyEventDatasets = makeEventDatasets(hFile, psanaEventDataSets)
 
     # Get a list of the time objects to use
     times = run.times()[:N]
     # go through the corresponding events
     for i, time in enumerate(times):
         evt = run.event(time)
-        getEventData(hFile, evt, eventDatasets.keys(), i, t0)
+        getEventData(hFile, evt, psanaEventDataSets.keys(), i, t0)
     
     # Close the hdf5 file
     hFile.close()
