@@ -136,7 +136,7 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
             # and connect
             ds, run = connectToDataSource(args.dataSource, verbose)
         else:
-            de, run = None, None
+            ds, run = None, None
 
 
     return ds, run, hFile
@@ -227,12 +227,13 @@ if __name__ == '__main__':
     psanaEventDataSets = psanaEventDataDefinition(N)
     emptyEventDatasets = makeEventDatasets(hFile, psanaEventDataSets)
 
-    # Get a list of the time objects to use
-    times = run.times()[:N]
-    # go through the corresponding events
-    for i, time in enumerate(times):
-        evt = run.event(time)
-        getEventData(hFile, evt, psanaEventDataSets.keys(), i, t0)
+    if run is not None:
+        # Get a list of the time objects to use
+        times = run.times()[:N]
+        # go through the corresponding events
+        for i, time in enumerate(times):
+            evt = run.event(time)
+            getEventData(hFile, evt, psanaEventDataSets.keys(), i, t0)
     
     # Close the hdf5 file
     hFile.close()
