@@ -15,7 +15,10 @@ acqirisChannel = 1
 fid = 'fiducial'
 evtTime = 'eventTime_s'
 rawTT = 'rawTimeTrace_V'
-
+EL3 = 'eBeamEnergyL3_MeV'
+EBC2 = 'eBeamEnergyBC2_MeV'
+Q = 'eBeamCharve_nC'
+IBC2 = 'eBeamCurrentBC2_A'
 
 # A command line parser
 def parseCmdline():
@@ -61,6 +64,13 @@ def parseCmdline():
             help=('Print stuff to the terminal')
             )
 
+    parser.add_argument(
+            '--overwrite',
+            default = False,
+            action = 'store_true',
+            help = ('Use the settings given in the hdf5 file but overwrite'
+                +' all the data in the file.'))
+
     return parser.parse_args()
 
 
@@ -77,7 +87,8 @@ def connectToDataSource(dataSource, verbose=False):
     return ds, run
 
  
-def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
+def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False,
+        overwrite=False):
     # If a data source is given
     if dataSource is not None:
         if verbose:
@@ -111,6 +122,18 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False):
     else:
         # Open the hdf5 file for reading and writing.
         hFile = h5py.File(args.hdf5File, 'r+')
+        if overwrite:
+            attrs = dict( hFile.attrs.items() )
+            if verbose:
+                print 'Overwrite option given.'
+                print 'Copying atributes of file: {}'.format(attrs)
+            hFile.close()
+            if verbose:
+                print 'File closed.'
+            hFile = h5py.File(args.hdf5File, 'w')
+            for k, v in attrs.iteritems():
+                hFile.attrs.create(k, v)
+
         if verbose:
             print 'HDF5 file {} opened for read and write.'.format(hFile.filename)
 
@@ -160,9 +183,12 @@ def psanaEventDataDefinition(numEvents=None, nSamples=None):
     # Specify the datasets that should be avaliable for psana data
     dataSets = {
             fid : {'shape' : (numEvents,), 'dtype' : 'i'},
-            evtTime : {'shape' : (numEvents,), 'dtype' : 'f'},
-            rawTT : {'shape' : (numEvents,  nSamples), 'dtype' : 'f'}
+            rawTT : {'shape' : (numEvents,  nSamples), 'dtype' : 'f'},
             }
+
+    for set in [evtTime, EL3, EBC2, Q, IBC2]:
+        dataSets[set] = {'shape' : (numEvents,), 'dtype' : 'f'}
+
     return dataSets
 
 def makeEventDatasets(hFile, dataSets):
@@ -225,8 +251,9 @@ if __name__ == '__main__':
         print 'Argumets are:'
         print repr(args)
 
+
     ds, run, hFile = setupFiles(args.dataSource, args.hdf5File, args.numEvents,
-            verbose)
+            verbose=verbose, overwrite=args.overwrite)
 
     # if the psana data is connected some data is missing.
     # Go through the environement data
@@ -247,7 +274,7 @@ if __name__ == '__main__':
     # Make space for the events in the hdf5 file and get a list of empty data
     # sets
     psanaEventDataSets = psanaEventDataDefinition(N, len(timeScale_us))
-    emptyEventDatasets = makeEventDatasets(hFile, psanaEventDataSets)
+    emptyEventDataSets = makeEventDatasets(hFile, psanaEventDataSets)
 
     if run is not None:
         # Get a list of the time objects to use
