@@ -2,6 +2,7 @@ import h5py
 import argparse
 import numpy as np
 import tof
+import lcls
 
 psana = None
 
@@ -234,6 +235,15 @@ def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
                 tof.timeTraceFromEvent(evt, tofSourceString,
                     acqirisChannel)[timeSlice], acqirisChannel)
         names.remove(rawTT)
+
+    for name, func in [
+            [EL3, lcls.getEBeamEnergyL3_MeV],
+            [EBC2, lcls.getEBeamEnergyBC2_MeV],
+            [Q, lcls.getEBeamCharge_nC],
+            [IBC2, lcls.getEBeamPkCurrentBC2_A]]:
+        if name in names:
+            hFile[name][i] = func(evt)
+            names.remove(name)
 
     if len(names) > 0:
         for name in names:
