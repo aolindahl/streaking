@@ -40,10 +40,10 @@ def timeScaleFromDataSource(ds, sourceString):
     # to microseconds 
     return np.arange(t0, dt*nSample, dt)*1e6
 
-def getTimeSlice(timeScale, tMin, tMax):
+def getSlice(sorted, Min, Max):
     return slice(
-            timeScale.searchsorted(tMin),
-            timeScale.searchsorted(tMax)
+            sorted.searchsorted(Min),
+            sorted.searchsorted(Max)
             )
 
 _vertScaling = {}
@@ -176,7 +176,7 @@ if __name__ == '__main__':
     timeScale = timeScaleFromDataSource(ds, tofSourceString)
 
     print 'Get time slice'
-    tSlice = getTimeSlice(timeScale, 1.4, 1.9)
+    tSlice = getSlice(timeScale, 1.4, 1.9)
     timeScale = timeScale[tSlice]
 
     print 'Set up scaling'

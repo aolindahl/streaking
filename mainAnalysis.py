@@ -13,6 +13,7 @@ timeSlice_us = [1.5, 1.7]
 acqirisChannel = 1
 
 # name definitions
+timeScale = 'timeScale_us'
 fid = 'fiducial'
 evtTime = 'eventTime_s'
 rawTT = 'rawTimeTrace_V'
@@ -204,13 +205,10 @@ def getEnvData(hFile, ds, setNames):
     # Make sure the set names is in a list
     setNames = list(setNames)
 
-    timeScale = 'timeScale_us'
     if (timeScale in setNames) and (timeScale not in hFile.keys()):
         # Get the time scale from the data
         fullTimeScale_us = tof.timeScaleFromDataSource(ds, tofSourceString)
-        timeSlice = slice( fullTimeScale_us.searchsorted( np.min( timeSlice_us ) ),
-                fullTimeScale_us.searchsorted( np.max( timeSlice_us ) )
-                )
+        timeSlice = tof.getSlice( fullTimeScale_us, *timeSlice_us )
         hFile.create_dataset(timeScale, data = fullTimeScale_us[timeSlice])
         hFile.create_dataset('timeSlice',
                 data = np.array( [timeSlice.start, timeSlice.stop] ) )
@@ -286,6 +284,7 @@ if __name__ == '__main__':
     psanaEventDataSets = psanaEventDataDefinition(N, len(timeScale_us))
     emptyEventDataSets = makeEventDatasets(hFile, psanaEventDataSets)
 
+    # Get the psana data into the hdf5 file
     if run is not None:
         # Get a list of the time objects to use
         times = run.times()[:N]
@@ -297,7 +296,8 @@ if __name__ == '__main__':
             evt = run.event(time)
             getEventData(hFile, evt, psanaEventDataSets.keys(), i, t_runStart,
                     timeSlice=timeSlice)
-    
+
+
     # Close the hdf5 file
     hFile.close()
     if verbose:
