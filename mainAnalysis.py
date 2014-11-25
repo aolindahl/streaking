@@ -21,6 +21,7 @@ EL3 = 'eBeamEnergyL3_MeV'
 EBC2 = 'eBeamEnergyBC2_MeV'
 Q = 'eBeamCharge_nC'
 IBC2 = 'eBeamCurrentBC2_A'
+FEE = 'feeEnergy_mJ'
 
 # A command line parser
 def parseCmdline():
@@ -186,6 +187,7 @@ def psanaEventDataDefinition(numEvents=None, nSamples=None):
     dataSets = {
             fid : {'shape' : (numEvents,), 'dtype' : 'i'},
             rawTT : {'shape' : (numEvents,  nSamples), 'dtype' : 'f'},
+            FEE : {'shape' : (numEvents, 4)}
             }
 
     for set in [evtTime, EL3, EBC2, Q, IBC2]:
@@ -242,6 +244,10 @@ def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
         if name in names:
             hFile[name][i] = func(evt)
             names.remove(name)
+
+    if FEE in names:
+        hFile[FEE][i,:] = lcls.getPulseEnergy_mJ(evt)
+        names.remove(FEE)
 
     if len(names) > 0:
         for name in names:
