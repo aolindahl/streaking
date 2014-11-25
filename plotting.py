@@ -7,7 +7,7 @@ print 'Avaliablea data:'
 for k in f:
     print '\t{}'.format(k)
 
-every = 1000
+every = 100
 sl = slice(None, None, every)
 
 
@@ -24,7 +24,7 @@ plot(f['eBeamEnergyBC2_MeV'][sl], f['eBeamEnergyL3_MeV'][sl] - f['eBeamEnergyBC2
 
 figure(3); clf()
 xlabel('BC2 energy (MeV)')
-xlabel('BC2 current (A)')
+ylabel('BC2 current (A)')
 plot(f['eBeamEnergyBC2_MeV'][sl], f['eBeamCurrentBC2_A'][sl], '.')
 
 f.close()

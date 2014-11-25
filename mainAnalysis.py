@@ -19,7 +19,7 @@ evtTime = 'eventTime_s'
 rawTT = 'rawTimeTrace_V'
 EL3 = 'eBeamEnergyL3_MeV'
 EBC2 = 'eBeamEnergyBC2_MeV'
-Q = 'eBeamCharve_nC'
+Q = 'eBeamCharge_nC'
 IBC2 = 'eBeamCurrentBC2_A'
 
 # A command line parser
@@ -297,6 +297,10 @@ if __name__ == '__main__':
             getEventData(hFile, evt, psanaEventDataSets.keys(), i, t_runStart,
                     timeSlice=timeSlice)
 
+    # hdf5 file manipulation
+     
+
+    
 
     # Close the hdf5 file
     hFile.close()
