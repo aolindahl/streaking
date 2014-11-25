@@ -7,7 +7,11 @@ print 'Avaliablea data:'
 for k in f:
     print '\t{}'.format(k)
 
+<<<<<<< HEAD
 every = 100
+=======
+every = 10
+>>>>>>> dc37a2847f49fe545ac29cc9eec7971ad9e9dda9
 sl = slice(None, None, every)
 Isl = (f['eBeamCurrentBC2_A'][sl] < 2e5) \
     & (f['eBeamEnergyL3_MeV'][sl] > 4500) \
