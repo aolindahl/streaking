@@ -9,7 +9,7 @@ psana = None
 # Analysis configuration
 tofSourceString = 'DetInfo(AmoETOF.0:Acqiris.0)'
 tofSource = None
-timeSlice_us = [1.5, 1.7]
+timeSlice_us = [1.45, 1.8]
 acqirisChannel = 1
 
 # name definitions
