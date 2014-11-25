@@ -304,7 +304,10 @@ if __name__ == '__main__':
                     timeSlice=timeSlice)
 
     # hdf5 file manipulation
-     
+    bl = 'baseline_V'  
+    if bl not in hFile:
+        blSlice = timeScale_us < 1.5
+        hFile.create_dataset(bl, data = hFile[rawTT][:,blSlice].mean())
 
     
 
