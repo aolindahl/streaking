@@ -8,7 +8,7 @@ import wiener
 
     
 # Grab a fil 
-fileName = 'data/run108_all.h5'
+fileName = 'data/run109_all.h5'
 
 # Open it
 file = h5py.File(fileName, 'r+')
