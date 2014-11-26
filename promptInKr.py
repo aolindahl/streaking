@@ -91,6 +91,6 @@ figure(7); clf()
 plot(t, wf)
 plot(t, wiener.deconvolution(wf, 10000, response))
 
-with h5py.File('kryptonPrompt.h5', 'w') as f:
+with h5py.File('data/KrPrompt.h5', 'w') as f:
     f.create_dataset('timeScale_us', data = t)
     f.create_dataset('responseFunction', data = response)
