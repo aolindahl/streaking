@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 import tof
 import lcls
+import wiener
 
 psana = None
 
@@ -306,9 +307,31 @@ if __name__ == '__main__':
     # hdf5 file manipulation
     bl = 'baseline_V'  
     if bl not in hFile:
+        if verbose:
+            print 'Adding baseline.'
         blSlice = timeScale_us < 1.5
         hFile.create_dataset(bl, data = hFile[rawTT][:,blSlice].mean())
 
+
+    # Deconvolute the time traces
+    deconv = 'deconvTimeTrace_V'
+    if deconv not in hFile:
+        if verbose:
+            print 'Trying to deconvolve and filter.'
+        with h5py.File('data/run109_all.h5') as f:
+            snr = f['traceSNR'][:]
+        with h5py.File('data/KrPrompt.h5') as f:
+            response = f['responseFunction'][:]
+            if not (f['timeScale_us'][:] == timeScale_us).all():
+                print '''[ ERROR ] The time scale vector in the response file,
+                does not match the time scale vector in the data file.'''
+                sys.exit()
+        dsetRaw = hFile[rawTT]
+        dset = hFile.require_dataset(deconv, dsetRaw.shape, dtype='f')
+        for i in range(N):
+            if verbose and i%(N/10)==0:
+                print '\t{} of {} done.'.format(i, N)
+            dset[i,:] = wiener.deconvolution(dsetRaw[i,:], snr, response)
     
 
     # Close the hdf5 file
