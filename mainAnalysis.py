@@ -74,6 +74,13 @@ def parseCmdline():
             action = 'store_true',
             help = ('Use the settings given in the hdf5 file but overwrite'
                 +' all the data in the file.'))
+    parser.add_argument(
+            '-u', '--update',
+            action = 'append',
+            type = str,
+            metavar = 'dataName',
+            default = [],
+            help = '''Name of data in hdf5 file to update.''')
 
     return parser.parse_args()
 
@@ -289,7 +296,7 @@ if __name__ == '__main__':
     # Make space for the events in the hdf5 file and get a list of empty data
     # sets
     psanaEventDataSets = psanaEventDataDefinition(N, len(timeScale_us))
-    emptyEventDataSets = makeEventDatasets(hFile, psanaEventDataSets)
+    makeEventDatasets(hFile, psanaEventDataSets)
 
     # Get the psana data into the hdf5 file
     if run is not None:
@@ -306,16 +313,17 @@ if __name__ == '__main__':
 
     # hdf5 file manipulation
     bl = 'baseline_V'  
-    if bl not in hFile:
+    if bl not in hFile or bl in args.update:
         if verbose:
             print 'Adding baseline.'
         blSlice = timeScale_us < 1.5
-        hFile.create_dataset(bl, data = hFile[rawTT][:,blSlice].mean())
+        dset = hFile.require_dataset(bl, shape=(), dtype='f')
+        dset = hFile[rawTT][:,blSlice].mean()
 
 
     # Deconvolute the time traces
     deconv = 'deconvTimeTrace_V'
-    if deconv not in hFile:
+    if deconv not in hFile or deconv in args.update:
         if verbose:
             print 'Trying to deconvolve and filter.'
         with h5py.File('data/run109_all.h5') as f:
@@ -327,7 +335,7 @@ if __name__ == '__main__':
                 does not match the time scale vector in the data file.'''
                 sys.exit()
         dsetRaw = hFile[rawTT]
-        dset = hFile.require_dataset(deconv, dsetRaw.shape, dtype='f')
+        dset = hFile.require_dataset(deconv, shape=dsetRaw.shape, dtype='f')
         for i in range(N):
             if verbose and i%(N/10)==0:
                 print '\t{} of {} done.'.format(i, N)
