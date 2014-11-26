@@ -4,6 +4,7 @@ import numpy as np
 import tof
 import lcls
 import wiener
+import sys
 
 psana = None
 
@@ -330,9 +331,11 @@ if __name__ == '__main__':
             snr = f['traceSNR'][:]
         with h5py.File('data/KrPrompt.h5') as f:
             response = f['responseFunction'][:]
-            if not (f['timeScale_us'][:] == timeScale_us).all():
+            if ( (f['timeScale_us'].shape != timeScale_us.shape)
+                    or not (f['timeScale_us'][:] == timeScale_us).all()):
                 print '''[ ERROR ] The time scale vector in the response file,
                 does not match the time scale vector in the data file.'''
+                hFile.close()
                 sys.exit()
         dsetRaw = hFile[rawTT]
         dset = hFile.require_dataset(deconv, shape=dsetRaw.shape, dtype='f')
