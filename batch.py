@@ -1,21 +1,32 @@
 import subprocess
 import sys
+import argparse
+import os
 
-if len(sys.argv) < 2:
-    print 'to few args'
-    sys.exit()
+parser = argparse.ArgumentParser()
+parser.add_argument('firstRun', type=int)
+parser.add_argument('lastRun', type=int, nargs='?', default=None)
+parser.add_argument('--overwrite', default=False, action='store_true')
 
-startRun = int(sys.argv[1])
+args = parser.parse_args()
+if args.lastRun is None:
+    args.lastRun = args.firstRun
 
-if len(sys.argv) < 3:
-    endRun = startRun
-else:
-    endRun = int(sys.argv[2])
-endRun += 1
 
-for run in range(startRun, endRun):
+for run in range(args.firstRun, args.lastRun+1):
+    hFileName = 'data/run{0}_all.h5'.format(run)
+    if not os.path.exists(hFileName):
+        sourceNeeded = True 
+    else:
+        sourceNeeded = False
+
 
     command = 'bsub -q psanaidleq -o logFiles/run{0}.log -J run{0}'.format(run)
-    command += ' python mainAnalysis.py exp=amoc8114:run={0} run{0}_all.h5'.format(run)
+    command += ' python mainAnalysis.py -v'
+    if sourceNeeded:
+        command += ' exp=amoc8114:run={}'.format(run)
+    command += ' ' + hFileName
+    if args.overwrite:
+        command += ' --overwrite'
     print command
     subprocess.call(command.split())
