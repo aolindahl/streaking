@@ -9,7 +9,7 @@ runs = range(132, 136+1)
 
 wf = None
 for run in runs:
-    f = h5py.File('KrRuns/run{}_all.h5'.format(run), 'r')
+    f = h5py.File('data/KrRuns/run{}_all.h5'.format(run), 'r')
     print 'File keys:'
     for k in f.keys():
         print '\t{}'.format(k)
@@ -73,7 +73,7 @@ smoothRegion = slice( smoothRegion.min() - sPoints,
         smoothRegion.max() + sPoints )
 
 smoothed = zeros_like(t)
-smoothed[smoothRegion] = wiener.edgeSmoothing(filt[smoothRegion] ,
+smoothed[smoothRegion] = wiener.edgeSmoothing(filt[smoothRegion],
         smoothPoints=sPoints)
 
 plot(tI, smoothed[I], label='filtered and edge-smothed')
