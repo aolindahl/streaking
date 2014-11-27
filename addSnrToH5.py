@@ -5,6 +5,7 @@ import random
 from lmfit import minimize, Parameters, Parameter, report_errors
 from wavelet_filter import wavelet_filt as wf
 import wiener
+from scipy.special import erf
 
     
 # Grab a fil 
@@ -46,7 +47,7 @@ powerAverageNoise[0] = 1e-4
 
 
 # Make the average of the spectra with signal
-powerAverageSignal = mean(abs(fft(tAmp[~noXray,:]))**2, axis=0)
+powerAverageSignal = mean( abs( fft( tAmp[~noXray,:] ) )**2, axis=0 )
 powerSignalAverage = abs(fft(tAmp[~noXray,:].mean(axis=0)))**2
 tAmpAverage = tAmp[~noXray,:].mean(axis=0)
 
@@ -87,6 +88,8 @@ def maskOut(v, mask):
 
 
 maskRegions = array([
+    [1.999, 2.001], # 2 GHz stuff narrow
+    [3.999, 4.001], # 4 GHz stuff narrow
     [1.8, 2.2], # 2 GHz stuff broad
     [3.87, 4.01], # 4 GHz stuff broad
     #[1. , 4.1], # Basically remove everything
@@ -106,7 +109,14 @@ signalSpec = sqrt(powerAverageSignal) - sqrt(noiseSpec)
 signalSpec[signalSpec < 0] = 0
 signalSpec = signalSpec**2
 
+
 SNR = signalSpec/noiseSpec
+#SNR = 1e7 * ones_like(signalSpec)
+#SNR[ abs(fAx-4) < 3.5 ] = 0 
+fParam = 4-abs(fAx-4)
+#SNR = (erf( (2.-fParam)/0.1) + 1) * 0.5 * 1e0
+g = (erf( (0.5-fParam)/0.1) + 1) * 0.5 * (1-1e-6)
+#SNR = g/(1.-g)
 G = SNR/(SNR + 1)
 
 #plot the noise spectrum
@@ -129,7 +139,7 @@ legend(loc='best')
 xlim(-40*df, fAx.max() + 40*df) 
 xlabel('Frequency unshifted (GHz) [Nyquist=4 GHz]')
 ylabel('Power')
-xlim(xmax=4.01)
+#xlim(xmax=4.01)
 
 y = random.sample(tAmp[~noXray,:], 1)[0]
 yF = real(ifft(fft(y) * G))
@@ -143,10 +153,11 @@ yMean = tAmpAverage
 yMeanF = wiener.noise(tAmpAverage, SNR)
 
 figure(3); clf()
-plot(tAx, yMean)
-plot(tAx, yMeanF)
+plot(tAx, yMean, label='mean raw')
+plot(tAx, yMeanF, label='mean wiener filtered')
 xlim(1.53, 1.59)
 ylim(-0.01, 0.015)
+legend(loc='best')
 
 IAuger = (1.53<tAx) & (tAx<1.59)
 augerPowerSpectrum = abs(fft(yMean[IAuger]))**2
@@ -177,6 +188,7 @@ figure(5); clf()
 plot(tAx, y)
 plot(tAx, wiener.deconvolution(y, SNR))
 plot(tAx, wiener.deconvolution(y, SNR, response))
+#plot(tAx, wf(wiener.deconvolution(y, SNR, response), thresh=0.0))
 #plot(tAx, wiener.deconvolution(y, 10, response))
 #plot(tAx, wiener.deconvolution(y, 100, response))
 #plot(tAx, wiener.deconvolution(y, 1000, response))
@@ -187,6 +199,6 @@ if snrName in file:
     if file[snrName].shape != SNR.shape:
         del file[snrName]
 snrDataSet = file.require_dataset('traceSNR', shape=SNR.shape, dtype='f')
-snrDataSet = SNR
+snrDataSet[:] = SNR
 
 file.close()
