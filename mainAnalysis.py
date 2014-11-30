@@ -1,10 +1,11 @@
 import h5py
 import argparse
 import numpy as np
+import sys
+sys.path.append('~/aolPyModules/')
 import tof
 import lcls
 import wiener
-import sys
 
 psana = None
 
