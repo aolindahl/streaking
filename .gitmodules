@@ -1,0 +1,3 @@
+[submodule "aolPyModules"]
+	path = aolPyModules
+	url = https://github.com/aolindahl/aolPyModules.git
