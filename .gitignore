@@ -52,3 +52,6 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Some other stuff not to be included in git
+data/
