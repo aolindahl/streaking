@@ -1,7 +1,6 @@
 import h5py
-from pylab import *
-ion()
-import random
+import pylab as pl
+pl.ion()
 from lmfit import minimize, Parameters, report_fit
 import sys
 
@@ -73,8 +72,7 @@ def energyFitResiduals(params, t, E=None, eps=None):
     if E==None:
         return mod
     if eps==None:
-        diff =  mod -E
-        return mod - E
+        return  mod -E
     return (mod - E) * eps**-2
 
 def startParams():
@@ -92,34 +90,45 @@ runs = [24, 26, 28, 31, 38]
 energies = {24:930, 26:950, 28:970, 31:1000, 38:1030}
 
 
-useNEvents = 10000
+useNEvents = 100
 
 files = {}
-Is = {}
+slices = {}
+events = {}
 peakResults = {}
 
 
 for run in runs:
     files[run] = h5py.File(
-            '../output/keepers/tofCalib/amoc8114_run{}_2014-9-22_1.hdf5'.format(run),
+            'data/run{}_all.h5'.format(run),
             'r')
-    if files[run]['nEvents'].value > useNEvents:
-        Is[run] = array( random.sample( arange(files[run]['nEvents'].value),
-                useNEvents ) )
-        Is[run].sort()
+    eventsInFile = files[run].attrs.get('numEvents')
+    events[run] = min(eventsInFile, useNEvents)
+    if eventsInFile > useNEvents:
+        step = int(pl.floor( (eventsInFile+0.0)/useNEvents ))
+        slices[run] = slice(0, step*useNEvents, step)
+        #Is[run] = pl.array( random.sample( range(eventsInFile), useNEvents ) )
+        #Is[run].sort()
     else:
-        Is[run] = slice(None)
+        slices[run] = slice(None)
+
 
 for run in runs:
-    peakResults[run] = zeros((len(Is[run]), 3))
-    for i, index in enumerate(Is[run]):
-        peakResults[run][i,:] = calcfwhm(files[run]['tof_timeScale_us'], 
-                files[run]['tof_timeAmplitudeFiltered_V'][index,:])
+    pl.figure(run); pl.clf()
+    peakResults[run] = pl.zeros((events[run], 3))
+    timeScale = files[run]['timeScale_us']
+    for i, trace in enumerate(files[run]['deconvTimeTrace_V'][slices[run],:]):
+        peakResults[run][i,:] = calcfwhm(timeScale, trace)
+        pl.plot(timeScale, trace)
+
+    #for i, index in enumerate(Is[run]):
+    #    peakResults[run][i,:] = calcfwhm(files[run]['timeScale_us'], 
+    #            files[run]['deconvTimeTrace_V'][index,:])
 
 
-figure(1); clf()
-for I, file in zip(Is.itervalues(), files.itervalues()):
-    plot(file['tof_timeScale_us'], file['tof_timeAmplitudeFiltered_V'][I,:].T)
+pl.figure(1); pl.clf()
+for s, file in zip(slices.itervalues(), files.itervalues()):
+    pl.plot(file['timeScale_us'], file['deconvTimeTrace_V'][s,:].T)
     #plot(file['tof_timeScale_us'], file['tof_timeAmplitudeFiltered_V'][I,:].T /
     #        file['fee_mJ'][I,:].mean(axis=1))
 
@@ -135,35 +144,37 @@ for run in runs:
     tMax += [peakResults[run][:,1]]
     VMax += [peakResults[run][:,2]]
     fwhm += [peakResults[run][:,0]]
-    eBeamEnergy += [files[run]['eBeam_energyL3_MeV'][Is[run],:].reshape(-1)]
-    eBeamEnergyBC2 += [files[run]['eBeam_energyBC2_MeV'][Is[run],:].reshape(-1)]
-    eBeamCurrent += [files[run]['eBeam_pkCurrBC2_A'][Is[run],:].reshape(-1)]
+    eBeamEnergy += [files[run]['eBeamEnergyL3_MeV'][slices[run]].reshape(-1)]
+    eBeamEnergyBC2 += [files[run]['eBeamEnergyBC2_MeV'][slices[run]].reshape(-1)]
+    eBeamCurrent += [files[run]['eBeamCurrentBC2_A'][slices[run]].reshape(-1)]
+
+sys.exit()
 
 # Callibrate the photon energy conversion
-eBeamEnergyPerRun = array(eBeamEnergy).mean(axis=1)
-eBeamEnergyBC2PerRun = array(eBeamEnergyBC2).mean(axis=1)
+eBeamEnergyPerRun = pl.array(eBeamEnergy).mean(axis=1)
+eBeamEnergyBC2PerRun = pl.array(eBeamEnergyBC2).mean(axis=1)
 eBEREalPerRun = eBeamEnergyPerRun - eBeamEnergyBC2PerRun / 1e3 - 5
 photonEnergyPerRun = energies.values()
 photonEnergyPerRun.sort()
 A = (photonEnergyPerRun/eBEREalPerRun**2).mean()
 
-VMax = concatenate(VMax)
+VMax = pl.concatenate(VMax)
 I = VMax > 0.1
 VMax = VMax[I]
-tMax = concatenate(tMax)[I]
-fwhm = concatenate(fwhm)[I]
-eBeamEnergy = concatenate(eBeamEnergy)[I]
-eBeamEnergyBC2 = concatenate(eBeamEnergyBC2)[I]
+tMax = pl.concatenate(tMax)[I]
+fwhm = pl.concatenate(fwhm)[I]
+eBeamEnergy = pl.concatenate(eBeamEnergy)[I]
+eBeamEnergyBC2 = pl.concatenate(eBeamEnergyBC2)[I]
 eBeamEnergyBC2 = (eBeamEnergyBC2 - 5e3) / 1e3 + 5e3
 eBEReal = eBeamEnergy - eBeamEnergyBC2 + 5e3
-eBeamCurrent = concatenate(eBeamCurrent)[I]
+eBeamCurrent = pl.concatenate(eBeamCurrent)[I]
 
 alpha = eBeamCurrent - eBeamCurrent.min()
 alpha /= alpha.max()
 
-figure(2); clf()
-plot(tMax, eBeamEnergy, '.')
-plot(tMax, eBEReal, '.')
+pl.figure(2); pl.clf()
+pl.plot(tMax, eBeamEnergy, '.')
+pl.plot(tMax, eBEReal, '.')
 
 
 photonEnergy = A * eBEReal**2
@@ -171,20 +182,20 @@ ipNe1s = 870.2
 
 electronEnergy = photonEnergy - ipNe1s
 
-figure(3); clf()
-scatter(tMax, electronEnergy, c=eBeamCurrent)
+pl.figure(3); pl.clf()
+pl.scatter(tMax, electronEnergy, c=eBeamCurrent)
 
 params = startParams()
 minimizeOut = minimize(energyFitResiduals, params, args=(tMax, electronEnergy, 1e-6))
 
-t = linspace(1.54, 1.61, 100)
-plot(t, energyFitResiduals(params, t))
+t = pl.linspace(1.54, 1.61, 100)
+pl.plot(t, energyFitResiduals(params, t))
 report_fit(params)
 
 
-hist, yAx, xAx = histogram2d(electronEnergy, tMax, 500)
-figure(4); clf()
-imshow(hist, interpolation='none', aspect='auto', origin='lower',
+hist, yAx, xAx = pl.histogram2d(electronEnergy, tMax, 500)
+pl.figure(4); pl.clf()
+pl.imshow(hist, interpolation='none', aspect='auto', origin='lower',
             extent=(xAx.min(), xAx.max(), yAx.min(), yAx.max()))
-plot(t, energyFitResiduals(params, t), 'r')
+pl.plot(t, energyFitResiduals(params, t), 'r')
 

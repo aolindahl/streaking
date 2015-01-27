@@ -9,7 +9,7 @@ for k in f:
     print '\t{}'.format(k)
 
 N = f.attrs.get('numEvents')
-nToPlot = 100
+nToPlot = 1000
 every = N/nToPlot
 sl = slice(None, None, every)
 EBC2 = f['eBeamEnergyBC2_MeV'][sl]
