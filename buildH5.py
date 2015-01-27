@@ -152,6 +152,7 @@ def setupFiles(dataSource, hdf5FileName, numEvents=-1, verbose=False,
 
         # Check if any psana data are missing
         if verbose:
+            print ''
             print 'Checking for psana data setds in the hdf5 file.'
 
         # Flag for missing data sets
@@ -263,6 +264,7 @@ def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
         for name in names:
             print '[WARNING]: Action for data set named "{}" not defined.'.format(name)
 
+
 #Running the snalysis
 if __name__ == '__main__':
     #Parset the command line arguments
@@ -313,6 +315,10 @@ if __name__ == '__main__':
             getEventData(hFile, evt, psanaEventDataSets.keys(), i, t_runStart,
                     timeSlice=timeSlice)
 
+    if verbose:
+        print ''
+        print 'Checking for custom data sets in the hdf5 file.'
+    
     # hdf5 file manipulation
     bl = 'baseline_V'  
     if bl not in hFile or bl in args.update:
@@ -321,6 +327,8 @@ if __name__ == '__main__':
         blSlice = timeScale_us < 1.5
         dset = hFile.require_dataset(bl, shape=(), dtype='f')
         dset = hFile[rawTT][:,blSlice].mean()
+    elif verbose:
+        print '"{}" is there.'.format(bl)
 
 
     # Deconvolute the time traces
@@ -328,25 +336,33 @@ if __name__ == '__main__':
     if deconv not in hFile or deconv in args.update:
         if verbose:
             print 'Trying to deconvolve and filter.'
+            print 'Loading SNR from run 109.'
+        snr = None
         with h5py.File('data/run109_all.h5') as f:
             snr = f['traceSNR'][:]
-        with h5py.File('data/KrPrompt.h5') as f:
-            response = f['responseFunction'][:]
-            if ( (f['timeScale_us'].shape != timeScale_us.shape)
+        if snr is None:
+            if verbose:
+                print '\tLoad failed. No deconvolution data added to file.'
+        else:
+            with h5py.File('data/KrPrompt.h5') as f:
+                response = f['responseFunction'][:]
+                if ( (f['timeScale_us'].shape != timeScale_us.shape)
                     or not (f['timeScale_us'][:] == timeScale_us).all()):
-                print '''[ ERROR ] The time scale vector in the response file,
-                does not match the time scale vector in the data file.'''
-                hFile.close()
-                sys.exit()
-        dsetRaw = hFile[rawTT]
-        dset = hFile.require_dataset(deconv, shape=dsetRaw.shape, dtype='f')
-        for i in range(N):
-            if verbose and i%(N/10)==0:
-                print '\t{} of {} done.'.format(i, N)
-            dset[i,:] = wiener.deconvolution(dsetRaw[i,:], snr, response)
+                        print '''[ ERROR ] The time scale vector in the response file,
+does not match the time scale vector in the data file.'''
+                        hFile.close()
+                        sys.exit()
+            dsetRaw = hFile[rawTT]
+            dset = hFile.require_dataset(deconv, shape=dsetRaw.shape, dtype='f')
+            for i in range(N):
+                if verbose and i%(N/10)==0:
+                    print '\t{} of {} done.'.format(i, N)
+                dset[i,:] = wiener.deconvolution(dsetRaw[i,:], snr, response)
+    elif verbose:
+        print '"{}" is there.'.format(deconv)
     
 
     # Close the hdf5 file
     hFile.close()
     if verbose:
-        print 'HDF5 file closed.'
+        print '\nHDF5 file closed.'
