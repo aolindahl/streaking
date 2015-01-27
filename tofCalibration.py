@@ -148,7 +148,6 @@ for run in runs:
     eBeamEnergyBC2 += [files[run]['eBeamEnergyBC2_MeV'][slices[run]].reshape(-1)]
     eBeamCurrent += [files[run]['eBeamCurrentBC2_A'][slices[run]].reshape(-1)]
 
-sys.exit()
 
 # Callibrate the photon energy conversion
 eBeamEnergyPerRun = pl.array(eBeamEnergy).mean(axis=1)
@@ -165,7 +164,7 @@ tMax = pl.concatenate(tMax)[I]
 fwhm = pl.concatenate(fwhm)[I]
 eBeamEnergy = pl.concatenate(eBeamEnergy)[I]
 eBeamEnergyBC2 = pl.concatenate(eBeamEnergyBC2)[I]
-eBeamEnergyBC2 = (eBeamEnergyBC2 - 5e3) / 1e3 + 5e3
+#eBeamEnergyBC2 = (eBeamEnergyBC2 - 5e3) / 1e3 + 5e3
 eBEReal = eBeamEnergy - eBeamEnergyBC2 + 5e3
 eBeamCurrent = pl.concatenate(eBeamCurrent)[I]
 
