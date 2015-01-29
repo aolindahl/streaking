@@ -158,7 +158,7 @@ pl.plot(t, pl.ifft( pl.fft(wf) / pl.fft(response)), label='raw devconvolution')
 # a rather blunt attempt to reduce the influence of the high gain at high
 # frequencies.
 pl.plot(t, wiener.deconvolution(wf, 10000, response), label='"damped" deconconv.')
-# The ra data
+# The raw data
 pl.plot(t, wf, label='raw')
 pl.legend(loc='best')
 pl.xlabel('Time (us)')
@@ -170,4 +170,10 @@ print 'Overwriting any existing file named "{}" with the prompt data'.format(
 with h5py.File(responseFile, 'w') as f:
     f.create_dataset('timeScale_us', data = t)
     f.create_dataset('responseFunction', data = response)
+
+# Plot file content jus to check
+print 'Reading file and plotting content, just to check.'
+with h5py.File(responseFile, 'r') as f:
+    pl.figure('File content'); pl.clf()
+    pl.plot(f['timeScale_us'], f['responseFunction'])
 print 'Done'
