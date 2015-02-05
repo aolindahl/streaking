@@ -84,6 +84,7 @@ def startParams():
 
 
 
+
 ####################
 
 # List of the callibration runs
@@ -262,3 +263,7 @@ pl.imshow(hist, interpolation='none', aspect='auto', origin='lower',
             extent=(xAx.min(), xAx.max(), yAx.min(), yAx.max()))
 pl.plot(t, energyFitResiduals(params, t), 'r')
 
+with h5py.File('data/tofCalibConstants.h5', 'w') as tofFile:
+    for k, v in params.iteritems():
+        tofFile.create_dataset(k, data=v.value)
+        tofFile.create_dataset('{}_stderr'.format(k), data=v.stderr)
