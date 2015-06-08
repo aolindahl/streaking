@@ -2,10 +2,8 @@ import h5py
 import argparse
 import numpy as np
 import sys
-sys.path.append('aolPyModules/')
-import tof
-import lcls
-import wiener
+from aolPyModules import tof, lcls, wiener, simplepsana
+import arguments
 
 psana = None
 
@@ -26,72 +24,13 @@ Q = 'eBeamCharge_nC'
 IBC2 = 'eBeamCurrentBC2_A'
 FEE = 'feeEnergy_mJ'
 
-# A command line parser
-def parseCmdline():
-    "Function used to parse the commahd line."
-    parser = argparse.ArgumentParser(
-            description=('Tool to get data from xtc files into a custom hdf5 '
-                + 'format.')
-            )
-
-    parser.add_argument(
-            'dataSource',
-            type = str,
-            nargs = '?',
-            default = None,
-            help=('xtc-file or other description of the data that cen be used'
-                + ' by psana. Example "exp=amoc8114:run=108". '
-                + ':idx will be added as needed.' 
-                + '\nThis could also be an hdf5 file previously created.')
-            )
-
-    parser.add_argument(
-            'hdf5File',
-            type=str,
-            default = None,
-            help=('Path to new or existing hdf5 file.')
-            )
-
-    parser.add_argument(
-            '-n',
-            '--numEvents',
-            metavar='N',
-            default = -1,
-            type = int,
-            help=('Number of events to process. The events will be distributed'
-                + 'over the whole file')
-            )
-
-    parser.add_argument(
-            '-v',
-            '--verbose',
-            action='store_true',
-            default=False,
-            help=('Print stuff to the terminal')
-            )
-
-    parser.add_argument(
-            '--overwrite',
-            default = False,
-            action = 'store_true',
-            help = ('Use the settings given in the hdf5 file but overwrite'
-                +' all the data in the file.'))
-    parser.add_argument(
-            '-u', '--update',
-            action = 'append',
-            type = str,
-            metavar = 'dataName',
-            default = [],
-            help = '''Name of data in hdf5 file to update.''')
-
-    return parser.parse_args()
-
 
 def connectToDataSource(dataSource, verbose=False):
     global psana
     import psana
     if ':idx' not in dataSource:
         dataSource += ':idx'
+    psana.setOption('psana.allow-corrupt-epics',True)
     ds = psana.DataSource(dataSource)
     if verbose:
         print 'Connected to data source {}.'.format(dataSource)
@@ -219,8 +158,13 @@ def getEnvData(hFile, ds, setNames):
 
     if (timeScale in setNames) and (timeScale not in hFile.keys()):
         # Get the time scale from the data
-        fullTimeScale_us = tof.timeScaleFromDataSource(ds, tofSourceString)
-        timeSlice = tof.getSlice( fullTimeScale_us, *timeSlice_us )
+        #fullTimeScale_us = tof.timeScaleFromDataSource(ds, tofSourceString)
+        fullTimeScale_us = simplepsana.get_acqiris_time_scale_us(
+                ds.env(), tofSourceString)
+        #timeSlice = tof.getSlice( fullTimeScale_us, *timeSlice_us )
+        timeSlice = slice(fullTimeScale_us.searchsorted(timeSlice_us[0]),
+                          fullTimeScale_us.searchsorted(timeSlice_us[1],
+                                                        side='left'))
         hFile.create_dataset(timeScale, data = fullTimeScale_us[timeSlice])
         hFile.create_dataset('timeSlice',
                 data = np.array( [timeSlice.start, timeSlice.stop] ) )
@@ -241,9 +185,14 @@ def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
         names.remove(evtTime)
 
     if rawTT in names:
-        hFile[rawTT][i,:] = -tof.rescaleToVolts(
-                tof.timeTraceFromEvent(evt, tofSourceString,
-                    acqirisChannel)[timeSlice], acqirisChannel)
+        #hFile[rawTT][i,:] = -tof.rescaleToVolts(
+        #        tof.timeTraceFromEvent(evt, tofSourceString,
+        #            acqirisChannel)[timeSlice], acqirisChannel)
+        try:
+            hFile[rawTT][i,:] = -(simplepsana.get_acqiris_waveform(
+                evt, tofSourceString, acqirisChannel)[timeSlice] *scaling_v + offset_v)
+        except:
+            hFile[rawTT][i,:] = np.nan
         names.remove(rawTT)
 
     for name, func in [
@@ -263,10 +212,10 @@ def getEventData(hFile, evt, setNames, i, t_runStart=0, timeSlice=slice(None)):
         for name in names:
             print '[WARNING]: Action for data set named "{}" not defined.'.format(name)
 
-#Running the snalysis
+#Running the analysis
 if __name__ == '__main__':
-    #Parset the command line arguments
-    args = parseCmdline()
+    #Parse the command line arguments
+    args = arguments.parse_cmd_line()
     # Make a verbose flag
     verbose = args.verbose
 
@@ -305,8 +254,10 @@ if __name__ == '__main__':
         # Get a list of the time objects to use
         times = run.times()[:N]
         # setup the trace rescaling
-        tof.setupVoltageRescalingFronDataSource(ds, tofSourceString,
-                acqirisChannel)
+        #tof.setupVoltageRescalingFronDataSource(ds, tofSourceString,
+                #acqirisChannel)
+        scaling_v, offset_v = simplepsana.get_acqiris_signal_scaling(
+                ds.env(), tofSourceString, acqirisChannel)
         # go through the corresponding events
         for i, time in enumerate(times):
             evt = run.event(time)
