@@ -14,15 +14,18 @@ if args.lastRun is None:
 
 
 for run in range(args.firstRun, args.lastRun+1):
-    hFileName = 'data/run{0}_all.h5'.format(run)
+    hFileName = 'data/run{}_all.h5'.format(run)
     if not os.path.exists(hFileName):
         sourceNeeded = True 
     else:
         sourceNeeded = False
 
+    with open('logFiles/run{}.log'.format(run), 'w') as fp:
+        pass
+
 
     command = 'bsub -q psanaidleq -o logFiles/run{0}.log -J run{0}'.format(run)
-    command += ' python mainAnalysis.py -v'
+    command += ' python buildH5.py -v'
     if sourceNeeded:
         command += ' exp=amoc8114:run={}'.format(run)
     command += ' ' + hFileName
