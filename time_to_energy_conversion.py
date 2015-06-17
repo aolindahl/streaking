@@ -509,11 +509,8 @@ def fit_tof_prediction(plot=False):
         time_eps_fig.clf()
         plt.scatter(tof,
                     tof_prediction_model(prediction_params,
-                                      **var_dict),
+                                         **var_dict),
                     s=1, c=pulse_energy, linewidths=(0,))
-        
-
-    
 
 
 if __name__ == '__main__':
