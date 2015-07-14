@@ -5,18 +5,20 @@ import numpy as np
 import h5py
 import time
 
-import arguments
+import argparse
 from aolPyModules import lcls
 from aolPyModules import simplepsana
-
-acqiris_source = 'DetInfo(AmoETOF.0:Acqiris.0)'
-acqiris_channel = 1
-n_bridge = 4
-time_range = (0, 2)
 
 comm = MPI.COMM_WORLD
 n_ranks = comm.size
 rank = comm.rank
+
+acqiris_source = 'DetInfo(AmoETOF.0:Acqiris.0)'
+acqiris_channel = 1
+power_meter_source = 'DetInfo(AmoITOF.0:Acqiris.0)'
+power_meter_channel = 0
+n_bridge = 4
+time_range = (1.5, 1.7)
 
 # Some name definitions
 lcls_scalars = {'energy_L3_MeV': lcls.getEBeamEnergyL3_MeV,
@@ -27,7 +29,35 @@ if rank == 0:
     lcls_warning_flags = []
 
 # Parse the command line
-args = arguments.parse_cmd_line()
+parser = argparse.ArgumentParser(
+        description=('Tool to get data from xtc files into a custom hdf5 '
+            + 'format.')
+        )
+
+parser.add_argument(
+        'dataSource', type = str,
+        help=('xtc-file or other description of the data that can be used'
+            + ' by psana. Example "exp=amoc8114:run=108". '
+            + ':idx will be added as needed.'))
+
+parser.add_argument(
+        'hdf5File', type=str,
+        help=('Name of hdf5 file to be created.' +
+              'The files will be put in /reg/d/psdm/AMO/amoc8114/scratch'))
+
+parser.add_argument(
+        '-n', '--numEvents', metavar='N', default = -1, type = int,
+        help=('Number of events to process. The events will be distributed'
+            + 'over the whole file'))
+
+parser.add_argument(
+        '-v', '--verbose', action='store_true', default=False,
+        help=('Print stuff to the terminal'))
+
+args =  parser.parse_args()
+
+args.hdf5File = '/reg/d/psdm/AMO/amoc8114/scratch/' + args.hdf5File
+
 # Make a verbose flag
 verbose = args.verbose
 
@@ -64,8 +94,15 @@ rank_times = times[rank_start_event: rank_stop_event]
 time_scale_full_us = simplepsana.get_acqiris_time_scale_us(run.env(), acqiris_source,
                                                       verbose=False)
 # Make the raw time slice
-time_slice = slice(time_scale_full_us.searchsorted(max(time_range),
+raw_time_slice = slice(time_scale_full_us.searchsorted(max(time_range),
                        side='left'))
+time_slice = slice(time_scale_full_us.searchsorted(min(time_range)),
+                   time_scale_full_us.searchsorted(max(time_range),
+                   side='left'))
+bg_end = time_scale_full_us.searchsorted(min(time_range))
+
+bridge_idx_shift = np.arange(time_slice.start, time_slice.start + 5)  % n_bridge
+
 # and time scale
 time_scale_us = time_scale_full_us[time_slice]
 
@@ -74,6 +111,12 @@ acq_factor_v, acq_offset_v = simplepsana.get_acqiris_signal_scaling(run.env(),
                                                                     acqiris_source,
                                                                     acqiris_channel,
                                                                     verbose=False)
+acq_factor_power_meter_v, acq_offset_power_meter_v = \
+        simplepsana.get_acqiris_signal_scaling(run.env(),
+                                               power_meter_source,
+                                               power_meter_channel,
+                                               verbose=False)
+
 # Everyone just grabs an event were there is acqiris data to have something to
 # work with
 start_time = 0  # initialize the start time
@@ -128,6 +171,10 @@ for k in lcls_scalars:
 fee = raw_data.create_dataset('FEE_energy_mJ', dtype=np.float,
                               shape=(n_events, 6))
 
+# Make space for the phase cavities
+ph_cav = raw_data.create_dataset('phase_cavity_times', dtype=np.float,
+                                 shape=(n_events, 2))
+
 # time information
 fiducial = raw_data.create_dataset('fiducial', dtype=np.int,
                                    shape=(n_events, ))
@@ -135,32 +182,63 @@ event_time = raw_data.create_dataset('event_time_s', dtype=np.float64,
                                      shape = (n_events, ))
 raw_data.create_dataset('start_time_s', data=start_time)
 
+# power meter
+power_meter = raw_data.create_dataset('power_meter_V', dtype=np.float,
+                                      shape=(n_events, ))
+
 ###################
 
 #print 'rank', rank, 'has events', rank_start_event, 'to', rank_stop_event,
 #print ':', range(rank_start_event, rank_stop_event)
 
 # Get the data
+if (rank == 0) and verbose:
+    print 'Rank', rank, 'processing', rank_n_events, 'events.'
 for i_event, t in zip(range(rank_start_event, rank_stop_event), rank_times):
+    if ((rank == 0) and verbose and
+            ((i_event-rank_start_event == rank_n_events -1) or
+             ((i_event-rank_start_event) / (rank_n_events/30) == 0))):
+        progress = 100 * i_event / (rank_n_events - 1)
+        print '\r[{:30}] {}%'.format('#'*(progress*30/100), progress),
     event = run.event(t)
     #Acqiris data
     acq_wave = simplepsana.get_acqiris_waveform(
             event,
             acqiris_source,
             acqiris_channel,
-            verbose=False)[time_slice].astype(float)
+            verbose=False)[raw_time_slice].astype(float)
 
     # Rescale to volts
     acq_wave *= acq_factor_v
     acq_wave -= acq_offset_v
     acq_wave *= -1  # Invert
 
-    # Save the raw data
-    time_signal[i_event,:] = acq_wave
+    # Acalculate bridged offsets
+    offsets = [acq_wave[start: bg_end: n_bridge].mean()
+               for start in range(n_bridge)]
 
+    # keep only the requested part
+    acq_wave_cut = acq_wave[time_slice]
+    # Correct the offsets in the bridged channels
+    for bridge_idx in range(n_bridge):
+        acq_wave_cut[bridge_idx_shift[bridge_idx]: : n_bridge] -= \
+                offsets[bridge_idx]
+
+    # Save the raw data
+    time_signal[i_event,:] = acq_wave_cut
+
+    # power meter
+    power_meter[i_event] = (-acq_offset_power_meter_v +
+                               acq_factor_power_meter_v *
+                               np.mean(simplepsana.get_acqiris_waveform(
+                                   event,
+                                   power_meter_source,
+                                   power_meter_channel)))
 
     # LCLS data
-    lcls.setEvent(event, verbose=True)
+    lcls.setEvent(event, verbose=False)
+    # Phase cavity timese
+    ph_cav[i_event, :] = lcls.getPhaseCavityTimes()
     # Go throught the scalar list
     for name, funk in lcls_scalars.iteritems():
         try:
@@ -178,4 +256,5 @@ for i_event, t in zip(range(rank_start_event, rank_stop_event), rank_times):
     fiducial[i_event] = lcls.getEventFiducial()
     event_time[i_event] = lcls.getEventTime(offset=start_time)
 
+print ''
 h5_file.close()
