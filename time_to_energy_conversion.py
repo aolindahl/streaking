@@ -30,24 +30,32 @@ def tof_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
         e_beam_energy = l3_energy
     else:
         e_beam_energy = l3_energy - BC2_factor * (bc2_energy - BC2_nominal)
+
     if fee is not None:
         e_beam_energy -= fee * fee_factor
+
     mod = t_0 + d_eff / np.sqrt(K * e_beam_energy**2 - IP)
+
     if tof is None:
         return mod
     return mod-tof
 
 
-def tof_prediction_params():
+def tof_prediction_params(l3_energy=[], bc2_energy=[], fee=[],
+                          tof=[]):
     params = lmfit.Parameters()
     params.add('d_eff', 1.23, min=1.1, max=1.3)
-#    params.add('B', -0.5, vary=False)
     params.add('t_0', 1.49, min=1.47, max=1.51)
     params.add('K', 4.57e-5, min=4.5e-5, max=1e-4)
     params.add('IP', Ne1s, vary=False)
-    params.add('BC2_nominal', 5e3, min=4.9e3, max=5.1e3)
-    params.add('BC2_factor', 1, min=0, max=2, vary=True)
-    params.add('fee_factor', 108)
+
+    use_bc2 = len(bc2_energy) > 0
+    params.add('BC2_nominal', 5e3, min=4.9e3, max=5.1e3, vary=use_bc2)
+    params.add('BC2_factor', 1, min=0, max=2, vary=use_bc2)
+
+    use_fee = len(fee) > 0
+    params.add('fee_factor', 108 if use_fee else 0, vary=use_fee)
+
     return params
 
 
@@ -399,9 +407,14 @@ def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
 
 
 def fit_tof_prediction(plot=False):
+    # Load the data fot the time to energy converstion
     calib_runs, h5_dict, calib_energy_map = load_tof_to_energy_data(
         verbose=verbose)
 
+    # Print the content of the first dataset
+    process.list_hdf5_content(h5_dict[calib_runs[0]])
+
+    # Make some empty lists
     e_energy = []
     p_energy_calib = []
     tof = []
@@ -410,37 +423,55 @@ def fit_tof_prediction(plot=False):
     l3_energy = []
     bc2_energy = []
     color_param = []
+    charge = []
+    current_bc2 = []
 
     if plot:
+        # Make the fee figure
         fee_fig = plt.figure('fee hist')
         fee_fig.clf()
+        # Make the energy figure
         energy_fig = plt.figure('energy')
         energy_fig.clf()
         energy_ax_list = []
+        # All data should be plotted in the last subplot
         common_ax = energy_fig.add_subplot(2, 3, 6)
+        plt.xlabel('L3 energy (MeV)')
         i_plot = 0
 
+    # For each of the runs
     for run, h5 in h5_dict.iteritems():
-        time_scale = h5['raw/time_scale'].value
-
+        # Get the fee values
         fee = h5['fee_mean'].value
+        # Check which fee values are actually real
         fee_valid = np.isfinite(fee)
+        # Implement a range selection of the valid fee values
         fee_selection = fee_valid & (0.03 < fee) & (fee < 0.08)
 
+        # Fill the fee plot
         if plot:
+            # Increment the plot number...
             i_plot += 1
+            # ...and make the axis
             ax = fee_fig.add_subplot(2, 3,  i_plot)
+            # Make fee histograms
             _, bins, _ = ax.hist(fee[fee_valid], bins=100)
+            # and plot the result
             ax.hist(fee[fee_selection], bins=bins)
             ax.set_title('run {}'.format(run))
 
+        # Get the peak center of the fee filtered peaks
         streak_center = h5['streak_peak_center'][fee_selection]
+        # Create a selection on the peak center based on the distribution
         sc_mean = streak_center.mean()
         sc_std = streak_center.std()
         streak_selection = (
             (sc_mean - 3*sc_std < h5['streak_peak_center'][:]) &
             (h5['streak_peak_center'][:] < sc_mean + 3*sc_std))
+
+        # Get the corrected l3 energy
         corrected_energy_l3 = h5['energy_L3_corrected_MeV'][fee_selection]
+        # and make a similar selection as above
         cor_l3_mean = corrected_energy_l3.mean()
         cor_l3_std = corrected_energy_l3.std()
         cor_l3_selection = (
@@ -448,25 +479,19 @@ def fit_tof_prediction(plot=False):
              h5['energy_L3_corrected_MeV'][:]) &
             (h5['energy_L3_corrected_MeV'][:] <
              cor_l3_mean + 3*cor_l3_std))
+
+        # The total shot selection taked all the three above created selections
+        # into account
         selection = fee_selection * streak_selection * cor_l3_selection
+
+        # Get the data for the selection
         streak_center = h5['streak_peak_center'][selection]
         streak_intensity = h5['streak_peak_integral'][selection]
         energy_l3 = h5['raw/energy_L3_MeV'][selection]
         energy_bc2 = h5['energy_BC2_MeV'][selection]
         corrected_energy_l3 = h5['energy_L3_corrected_MeV'][selection]
 
-        if plot:
-            ax = energy_fig.add_subplot(2, 3, i_plot)
-            energy_ax_list.append(ax)
-            plt.plot(energy_l3, streak_center, '.')
-#                plt.scatter(energy_l3, streak_center,
-#                            s=1, c=fee[selection],
-#                            linewidths=(0,), alpha=1)
-
-            ax.set_title('run {}'.format(run))
-            common_ax.plot(energy_l3, streak_center, '.')
-#                common_ax.plot(streak_center, corrected_energy_l3, '.')
-
+        # Append the data in the lists
         e_energy.append(corrected_energy_l3)
         l3_energy.append(energy_l3)
         bc2_energy.append(energy_bc2)
@@ -475,42 +500,71 @@ def fit_tof_prediction(plot=False):
         integral.append(streak_intensity)
         pulse_energy.append(fee[selection])
         color_param.append(h5['energy_BC2_MeV'][selection])
+        charge.append(h5['raw/charge_nC'][selection])
+        current_bc2.append(h5['raw/current_BC2_A'][selection])
 
+        # Populate the energy plot
+        if plot:
+            # Make the axis
+            ax = energy_fig.add_subplot(2, 3, i_plot)
+            energy_ax_list.append(ax)
+#            plt.plot(energy_l3, streak_center, '.')
+            plt.scatter(energy_l3, streak_center,
+                        s=1, c=fee[selection],
+                        linewidths=(0,), alpha=1)
+            if i_plot % 3 == 1:
+                plt.ylabel('Photoline center (us)')
+            if i_plot > 3:
+                plt.xlabel('L3 energy (MeV)')
+
+            ax.set_title('run {}'.format(run))
+            common_ax.plot(energy_l3, streak_center, '.')
+#                common_ax.plot(streak_center, corrected_energy_l3, '.')
+
+    # Convert the data lists to arrays
     e_energy = np.concatenate(e_energy)
     l3_energy = np.concatenate(l3_energy)
     bc2_energy = np.concatenate(bc2_energy)
     color_param = np.concatenate(color_param)
     p_energy_calib = np.array(p_energy_calib)
-    p_energy_axis = np.linspace(p_energy_calib.min() * 0.99,
-                                p_energy_calib.max() * 1.01,
-                                2**10)
     tof = np.concatenate(tof)
     integral = np.concatenate(integral)
     pulse_energy = np.concatenate(pulse_energy)
+    charge = np.concatenate(charge)
+    current_bc2 = np.concatenate(current_bc2)
+
+    p_energy_axis = np.linspace(p_energy_calib.min() * 0.99,
+                                p_energy_calib.max() * 1.01,
+                                2**10)
 
     if plot:
         energy_ax_list.append(common_ax)
 
-    prediction_params = tof_prediction_params()
-#    prediction_params['BC2_factor'].vary=False
-#    prediction_params['BC2_nominal'].vary = False
-#    prediction_params['fee_factor'].value = 0
-#    prediction_params['fee_factor'].vary = False
+    # Select the parameters to be used in the tof time prediction calculation
     var_dict = {'l3_energy': l3_energy,
                 'bc2_energy': bc2_energy,
                 'fee': pulse_energy,
-                'tof': tof}
+                'tof': tof
+                }
+
+    # Create the parameters for the tof prediction
+    prediction_params = tof_prediction_params(**var_dict)
+    # Perform the fit
     res = lmfit.minimize(tof_prediction_model, prediction_params,
                          kws=var_dict)
+    # Present the results
     lmfit.report_fit(res)
 
+    # Plot the differences between the measured tof and the predicted tof
     if plot:
         time_eps_fig = plt.figure('time eps')
         time_eps_fig.clf()
         plt.scatter(tof,
                     tof_prediction_model(prediction_params,
                                          **var_dict),
-                    s=1, c=pulse_energy, linewidths=(0,))
+                    s=1, c=current_bc2, linewidths=(0,))
+        plt.xlabel('TOF (us)')
+        plt.ylabel('TOF prediction error (us)')
 
 
 if __name__ == '__main__':
