@@ -523,6 +523,7 @@ if __name__ == '__main__':
     # Time trace rellated information
     raw_time = raw_group['time_scale'].value
     raw_traces = raw_group['time_signal']
+    filtered_traces = h5['filtered_time_signal']
 
     # Pulse energy
     raw_fee_dset = raw_group['FEE_energy_mJ']
@@ -580,16 +581,16 @@ if __name__ == '__main__':
         trace_fig = plt.figure('traces {}'.format(hdf5_file))
         trace_fig.clf()
         raw_mean_tr = raw_traces.value.mean(0)
+        deconv_mean_tr = filtered_traces.value.mean(0)
         rand_event = np.random.randint(n_events)
+        response, _ = get_response(plot=False, verbose=verbose)
+
         plt.plot(raw_time, raw_traces[rand_event, :],
                  label='single trace')
+        plt.plot(raw_time, filtered_traces[rand_event, :],
+                 label='Deconv single trace')
+
         plt.plot(raw_time, raw_mean_tr, label='mean trace')
-        plt.plot(raw_time, wiener.deconvolution(raw_mean_tr,
-                                                snr,
-                                                response),
+        plt.plot(raw_time, deconv_mean_tr,
                  label='Deconv mean')
-        plt.plot(raw_time, wiener.deconvolution(raw_traces[rand_event, :],
-                                                snr,
-                                                response),
-                 label='Deconv single')
         plt.legend(loc='best')
