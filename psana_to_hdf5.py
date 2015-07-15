@@ -192,14 +192,21 @@ power_meter = raw_data.create_dataset('power_meter_V', dtype=np.float,
 #print ':', range(rank_start_event, rank_stop_event)
 
 # Get the data
-if (rank == 0) and verbose:
-    print 'Rank', rank, 'processing', rank_n_events, 'events.'
+if (rank == 0):
+    progress_step = max(1, rank_n_events/100)
+    if verbose:
+        print 'Rank', rank, 'processing', rank_n_events, 'events.'
 for i_event, t in zip(range(rank_start_event, rank_stop_event), rank_times):
-    if ((rank == 0) and verbose and
-            ((i_event-rank_start_event == rank_n_events -1) or
-             ((i_event-rank_start_event) / (rank_n_events/30) == 0))):
-        progress = 100 * i_event / (rank_n_events - 1)
+    if ((rank == 0) and verbose and (
+            (i_event-rank_start_event == rank_n_events -1) or
+            (i_event % progress_step == 0))):
+        progress = 100 * (i_event-rank_start_event) / (rank_n_events - 1)
+#        print '\n[{}, {}], {}: [{}]'.format(rank_start_event,
+#                                        rank_n_events,
+#                                        i_event,
+#                                        progress)
         print '\r[{:30}] {}%'.format('#'*(progress*30/100), progress),
+        sys.stdout.flush()
     event = run.event(t)
     #Acqiris data
     acq_wave = simplepsana.get_acqiris_waveform(
@@ -248,7 +255,6 @@ for i_event, t in zip(range(rank_start_event, rank_stop_event), rank_times):
                 print 'Exception "{}" when trying to get {}.'.format(e.message,
                                                                      name)
                 lcls_warning_flags.append(name)
-
     # fee
     fee[i_event, :] = lcls.getPulseEnergy_mJ(nValues=6)
 
