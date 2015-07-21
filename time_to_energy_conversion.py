@@ -5,21 +5,22 @@ Created on Thu Jun 11 15:49:41 2015
 @author: antlin
 """
 import matplotlib.pyplot as plt
-#from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import lmfit
 import h5py
 
 import process_hdf5 as process
 from aolPyModules import tof as tof_module
+from aolPyModules.aolUtil import struct
 
 Ne1s = 870.2
 
 
 def tof_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
                          tof=None):
-    d_eff = params['d_eff'].value
-    t_0 = params['t_0'].value
+    d_eff = params['d_eff_prediction'].value
+    t_0 = params['t_0_prediction'].value
+    E_0 = params['E_0_prediction'].value
     K = params['K'].value
     IP = params['IP'].value
     BC2_nominal = params['BC2_nominal'].value
@@ -34,7 +35,7 @@ def tof_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
     if fee is not None:
         e_beam_energy -= fee * fee_factor
 
-    mod = t_0 + d_eff / np.sqrt(K * e_beam_energy**2 - IP)
+    mod = t_0 + d_eff / np.sqrt(K * e_beam_energy**2 - IP - E_0)
 
     if tof is None:
         return mod
@@ -43,11 +44,8 @@ def tof_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
 
 def tof_prediction_params(l3_energy=[], bc2_energy=[], fee=[],
                           tof=[]):
-    params = lmfit.Parameters()
-    params.add('d_eff', 1.23, min=1.1, max=1.3)
-    params.add('t_0', 1.49, min=1.47, max=1.51)
+    params = photon_energy_params(postfix='_prediction')
     params.add('K', 4.57e-5, min=4.5e-5, max=1e-4)
-    params.add('IP', Ne1s, vary=False)
 
     use_bc2 = len(bc2_energy) > 0
     params.add('BC2_nominal', 5e3, min=4.9e3, max=5.1e3, vary=use_bc2)
@@ -57,6 +55,48 @@ def tof_prediction_params(l3_energy=[], bc2_energy=[], fee=[],
     params.add('fee_factor', 108 if use_fee else 0, vary=use_fee)
 
     return params
+
+
+def photoelectron_energy_model(params, tof, e_pe=None, postfix=''):
+    t_0 = params['t_0' + postfix].value
+    E_0 = params['E_0' + postfix].value
+    d_eff = params['d_eff' + postfix].value
+
+    mod = E_0 + (d_eff / (tof - t_0))**2
+
+    if e_pe is None:
+        return mod
+    return mod - e_pe
+
+
+def photon_energy_model(params, tof, e_p=None, postfix=''):
+    e_ip = params['IP'].value
+
+    mod = photoelectron_energy_model(params, tof, postfix=postfix) + e_ip
+
+    if e_p is None:
+        return mod
+    return mod - e_p
+
+
+def photon_energy_params(postfix=''):
+    params = lmfit.Parameters()
+    params.add('d_eff' + postfix, 1.23, min=1, max=2)
+    params.add('t_0' + postfix, 1.49, min=1.47, max=1.51)
+    params.add('E_0' + postfix, 0, vary=False)
+    params.add('IP', Ne1s, vary=False)
+
+    return params
+
+
+def photoelectron_energy_prediction_model(params, l3_energy, bc2_energy=None,
+                                          fee=None, tof=None):
+    return photoelectron_energy_model(params,
+                                      tof_prediction_model(
+                                          params,
+                                          l3_energy=l3_energy,
+                                          bc2_energy=bc2_energy,
+                                          fee=fee))
 
 
 def fel_params():
@@ -162,6 +202,8 @@ def slicing_plot(x, y, z, n_z=6, fig_num=None):
 
 
 def load_tof_to_energy_data(verbose=0):
+    if verbose > 0:
+        print 'In "load_tof_to_energy_data()".'
     calib_runs = [24, 26, 28, 31, 38]
     calib_energies = [930, 950, 970, 1000, 1030]
     calib_energy_map = dict(zip(calib_runs, calib_energies))
@@ -169,172 +211,182 @@ def load_tof_to_energy_data(verbose=0):
     h5_dict = {}
     for run in calib_runs:
         name = process.h5_file_name_template.format(run)
+        process.update_with_noise_and_response(name, verbose=verbose)
         h5_dict[run] = h5py.File(name, 'r+')
 
     return calib_runs, h5_dict, calib_energy_map
 
 
-def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
+def get_calib_data(plot=False, verbose=0):
+    # Load the data
     calib_runs, h5_dict, calib_energy_map = load_tof_to_energy_data(
         verbose=verbose)
 
-    # Make ampty lists for the parameters we need
-    e_energy = []
-    p_energy_calib = []
-    tof = []
-    integral = []
-    pulse_energy = []
+    # Make the calib data struct
+    calib_data = struct()
+
+    # Make some empty lists
+    calib_data.e_energy = []
+    calib_data.p_energy_calib = []
+    calib_data.p_energy_calib_mean = []
+    calib_data.tof = []
+    calib_data.integral = []
+    calib_data.pulse_energy = []
+    calib_data.l3_energy = []
+    calib_data.bc2_energy = []
+    calib_data.charge = []
+#    current_bc2 = []
+#    pct = []
 
     if plot:
-        # Set up the figures
+        # Make the fee figure
         fee_fig = plt.figure('fee hist')
         fee_fig.clf()
+        # Make the energy figure
         energy_fig = plt.figure('energy')
         energy_fig.clf()
         energy_ax_list = []
+        # All data should be plotted in the last subplot
         common_ax = energy_fig.add_subplot(2, 3, 6)
+        plt.xlabel('L3 energy (MeV)')
         i_plot = 0
 
+    # For each of the runs
     for run, h5 in h5_dict.iteritems():
-        time_scale = h5['raw/time_scale'].value
-
+        # Get the fee values
         fee = h5['fee_mean'].value
+        # Check which fee values are actually real
         fee_valid = np.isfinite(fee)
+        # Implement a range selection of the valid fee values
         fee_selection = fee_valid & (0.03 < fee) & (fee < 0.08)
 
+        # Fill the fee plot
         if plot:
+            # Increment the plot number...
             i_plot += 1
+            # ...and make the axis
             ax = fee_fig.add_subplot(2, 3,  i_plot)
+            # Make fee histograms
             _, bins, _ = ax.hist(fee[fee_valid], bins=100)
+            # and plot the result
             ax.hist(fee[fee_selection], bins=bins)
             ax.set_title('run {}'.format(run))
 
+        # Get the peak center of the fee filtered peaks
         streak_center = h5['streak_peak_center'][fee_selection]
+        # Create a selection on the peak center based on the distribution
         sc_mean = streak_center.mean()
         sc_std = streak_center.std()
         streak_selection = (
             (sc_mean - 3*sc_std < h5['streak_peak_center'][:]) &
             (h5['streak_peak_center'][:] < sc_mean + 3*sc_std))
+
+        # Get the corrected l3 energy
         corrected_energy_l3 = h5['energy_L3_corrected_MeV'][fee_selection]
+        # and make a similar selection as above
         cor_l3_mean = corrected_energy_l3.mean()
         cor_l3_std = corrected_energy_l3.std()
         cor_l3_selection = (
-            (cor_l3_mean - 3*cor_l3_std < h5['energy_L3_corrected_MeV'][:]) &
-            (h5['energy_L3_corrected_MeV'][:] < cor_l3_mean + 3*cor_l3_std))
-        selection = fee_selection * streak_selection * cor_l3_selection
-        streak_center = h5['streak_peak_center'][selection]
-        streak_intensity = h5['streak_peak_integral'][selection]
-#        energy_l3 = h5['raw/energy_L3_MeV'][selection]
-#        energy_bc2 = h5['energy_BC2_MeV'][selection]
-        corrected_energy_l3 = h5['energy_L3_corrected_MeV'][selection]
+            (cor_l3_mean - 3*cor_l3_std <
+             h5['energy_L3_corrected_MeV'][:]) &
+            (h5['energy_L3_corrected_MeV'][:] <
+             cor_l3_mean + 3*cor_l3_std))
 
+        # The total shot selection taked all the three above created selections
+        # into account
+        selection = fee_selection * streak_selection * cor_l3_selection
+
+        # Append the data in the lists
+        calib_data.e_energy.append(h5['energy_L3_corrected_MeV'][selection])
+        calib_data.l3_energy.append(h5['raw/energy_L3_MeV'][selection])
+        calib_data.bc2_energy.append(h5['energy_BC2_MeV'][selection])
+        calib_data.p_energy_calib.append(
+            [calib_energy_map[run]]*selection.sum())
+        calib_data.p_energy_calib_mean.append([calib_energy_map[run]])
+        calib_data.tof.append(h5['streak_peak_center'][selection])
+        calib_data.integral.append(h5['streak_peak_integral'][selection])
+        calib_data.pulse_energy.append(fee[selection])
+        calib_data.charge.append(h5['raw/charge_nC'][selection])
+#        current_bc2.append(h5['raw/current_BC2_A'][selection])
+#        pct.append(h5['raw/phase_cavity_times'][selection, 1])
+#        pct[-1] -= pct[-1][np.isfinite(pct[-1])].mean()
+
+        # Populate the energy plot
         if plot:
+            # Make the axis
             ax = energy_fig.add_subplot(2, 3, i_plot)
             energy_ax_list.append(ax)
-            plt.scatter(streak_center,
-                        corrected_energy_l3,
-                        s=1, c=fee[selection],
+#            plt.plot(energy_l3, streak_center, '.')
+            plt.scatter(calib_data.l3_energy[-1],
+                        calib_data.tof[-1],
+                        s=1, c=calib_data.pulse_energy[-1],
                         linewidths=(0,), alpha=1)
+            if i_plot % 3 == 1:
+                plt.ylabel('Photoline center (us)')
+            if i_plot > 3:
+                plt.xlabel('L3 energy (MeV)')
 
             ax.set_title('run {}'.format(run))
-            common_ax.plot(streak_center, corrected_energy_l3, '.')
+            common_ax.plot(calib_data.l3_energy[-1], calib_data.tof[-1], '.')
 
-        e_energy.append(corrected_energy_l3)
-        p_energy_calib.extend([calib_energy_map[run]]*selection.sum())
-        tof.append(streak_center)
-        integral.append(streak_intensity)
-        pulse_energy.append(fee[selection])
+    calib_data.tof_mean = [[np.mean(tof_vals)] for tof_vals in calib_data.tof]
 
-    e_energy = np.concatenate(e_energy)
-    p_energy_calib = np.array(p_energy_calib)
-    p_energy_axis = np.linspace(p_energy_calib.min() * 0.99,
-                                p_energy_calib.max() * 1.01,
-                                2**10)
-    tof = np.concatenate(tof)
-    integral = np.concatenate(integral)
-    pulse_energy = np.concatenate(pulse_energy)
+    # Convert the data lists to arrays
+    if verbose:
+        print 'Making data arrays.'
+    for k, v in calib_data.toDict().iteritems():
+        setattr(calib_data, k, np.concatenate(v))
+
+    return calib_data
+
+
+def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
+    # Get time to energy conversion parameters
+    time_to_energy_params, tof_prediction_params = \
+        fit_tof_prediction(plot=plot, verbose=verbose)
+    # Get the calib data
+    calib_data = get_calib_data(plot=plot, verbose=verbose)
+    # and unpack the needed parameters
+    integral = calib_data.integral
+    pulse_energy = calib_data.pulse_energy
+    tof = calib_data.tof
+#    e_energy = calib_data.e_energy
+
+    # Load the data files
+    _, h5_dict, _ = load_tof_to_energy_data()
+    # and get the time scale
+    time_scale = h5_dict.values()[0]['raw/time_scale'].value
+
+#    e_energy = np.concatenate(e_energy)
+#    p_energy_axis = np.linspace(p_energy_calib.min() * 0.99,
+#                                p_energy_calib.max() * 1.01,
+#                                2**10)
+#    tof = np.concatenate(tof)
+#    integral = np.concatenate(integral)
+#    pulse_energy = np.concatenate(pulse_energy)
 
 #    e_e_axis = np.linspace(4500, 4800, 2**10)
     tof_lims = np.linspace(1.58, 1.66, 2**10 + 1)
     tof_axis = (tof_lims[:-1] + tof_lims[1:]) / 2
 
-    p_eb_params = fel_params()
-    lmfit.minimize(fel_model, p_eb_params, args=(e_energy, p_energy_calib))
-
-    p_energy = fel_model(p_eb_params, e_energy)
-    pe_energy = p_energy - Ne1s
-
-    tof_to_pe_model = lmfit.Model(tof_module.energy_from_time_physical)
-    tof_to_pe_model.set_param_hint('D_mm', value=600, min=0)
-    tof_to_pe_model.set_param_hint('E_offset_eV', value=0)
-    tof_to_pe_model.set_param_hint('prompt_us', value=1.5, min=1, max=2)
-    tof_to_pe_model.set_param_hint('t_offset_us', value=0, vary=False)
-    tof_to_pe_res = tof_to_pe_model.fit(pe_energy, time=tof)
-
+    # Convert the effective length to real units (mm)
+    D_mm = (time_to_energy_params['d_eff'].value * tof_module.c_0_mps * 1e-3 /
+            np.sqrt(tof_module.m_e_eV / 2))
     trans_mat, _ = tof_module.get_time_to_energy_conversion(
         time_scale, energy_scale_eV, verbose=(verbose > 1),
-        **tof_to_pe_res.best_values)
+        D_mm=D_mm,
+        prompt_us=time_to_energy_params['t_0'].value,
+        t_offset_us=0,
+        E_offset_eV=time_to_energy_params['E_0'].value)
     trans_mat = trans_mat.toarray()
 
     if plot:
-        plt.figure('model')
-        plt.clf()
-
-        plt.subplot(221)
-        plt.plot(tof, e_energy, '.')
-    #    plt.plot(tof_axis, tof_e_beam_energy_model(eb_params, tof_axis), '-')
-        plt.xlabel('tof')
-        plt.ylabel('corrected e beam energy')
-
-        plt.subplot(222)
-        plt.plot(p_energy_calib, e_energy, '.')
-        plt.plot(p_energy_axis, fel_model_inverted(p_eb_params, p_energy_axis))
-        plt.xlabel('set photon energy')
-        plt.ylabel('corrected e beam energy')
-
-        plt.subplot(224)
-        plt.plot(tof, p_energy, '.')
-        plt.plot(tof_axis,
-                 tof_to_pe_model.eval(time=tof_axis,
-                                      **tof_to_pe_res.best_values) + Ne1s,
-                 '-')
-        plt.xlabel('tof')
-        plt.ylabel('set photon energy')
-
-        plt.subplot(223)
-        plt.plot(tof, pe_energy, '.')
-        plt.plot(tof_axis,
-                 tof_to_pe_model.eval(time=tof_axis,
-                                      **tof_to_pe_res.best_values),
-                 '-')
-
         plt.figure('trans mat raw')
         plt.clf()
         plt.imshow(trans_mat, interpolation='none', origin='low',
                    aspect='auto', extent=(time_scale.min(), time_scale.max(),
                                           energy_scale_eV.min(),
                                           energy_scale_eV.max()))
-
-    if verbose:
-        print '\nCorrected L3 energy to photon energy conversion fit params:'
-        print lmfit.report_fit(p_eb_params)
-        print '\nTime of flight to electron energy conversion:'
-        print tof_to_pe_res.fit_report
-
-#    plt.plot(e_e_axis, fel_model(params, e_e_axis))
-
-#    slicing_plot(streak_center, energy_l3, energy_bc2,
-#                 n_z=9, fig_num='slice')
-
-#    for ax in energy_ax_list:
-#        ax.autoscale(False)
-#        ax.plot(tof_axis, tof_e_beam_energy_model(eb_params, tof_axis), '-')
-#
-#    plt.figure('time to energy')
-#    plt.subplot(121)
-#    plt.plot(tof_axis, tof_e_energy_model(eb_params, tof_axis))
-#    plt.subplot(122)
-#    plt.plot(tof_axis, tof_photon_energy_model(eb_params, tof_axis))
 
     norm_integral = integral/pulse_energy
     binned_norm_int = np.empty_like(tof_axis)
@@ -402,143 +454,37 @@ def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
     transmission_factors /= transmission_factors[
         transmission_factors > 0].min()
 
-    return (trans_mat * transmission_factors, time_scale, energy_scale_eV,
-            tof_to_pe_res.best_values)
+    return (trans_mat * transmission_factors,
+            time_scale,
+            energy_scale_eV,
+            time_to_energy_params,
+            tof_prediction_params)
 
 
-def fit_tof_prediction(plot=False):
-    # Load the data fot the time to energy converstion
-    calib_runs, h5_dict, calib_energy_map = load_tof_to_energy_data(
-        verbose=verbose)
+def fit_tof_prediction(plot=False, verbose=0):
+    if verbose > 0:
+        print 'In "fit_tof_prediction()".'
+    # Get the calibration data
+    calib_data = get_calib_data(plot=plot, verbose=verbose)
 
-    # Print the content of the first dataset
-    process.list_hdf5_content(h5_dict[calib_runs[0]])
+    # Unpack calib data
+    tof_mean = calib_data.tof_mean
+    p_energy_calib_mean = calib_data.p_energy_calib_mean
+    l3_energy = calib_data.l3_energy
+    bc2_energy = calib_data.bc2_energy
+    pulse_energy = calib_data.pulse_energy
+    tof = calib_data.tof
+    p_energy_calib = calib_data.p_energy_calib
 
-    # Make some empty lists
-    e_energy = []
-    p_energy_calib = []
-    tof = []
-    integral = []
-    pulse_energy = []
-    l3_energy = []
-    bc2_energy = []
-    color_param = []
-    charge = []
-    current_bc2 = []
+    # Fit the time to energuy conversion using the values given by the
+    # operators
+    time_to_energy_params = photon_energy_params()
+    res = lmfit.minimize(photon_energy_model, time_to_energy_params,
+                         args=(tof_mean, p_energy_calib_mean))
 
-    if plot:
-        # Make the fee figure
-        fee_fig = plt.figure('fee hist')
-        fee_fig.clf()
-        # Make the energy figure
-        energy_fig = plt.figure('energy')
-        energy_fig.clf()
-        energy_ax_list = []
-        # All data should be plotted in the last subplot
-        common_ax = energy_fig.add_subplot(2, 3, 6)
-        plt.xlabel('L3 energy (MeV)')
-        i_plot = 0
-
-    # For each of the runs
-    for run, h5 in h5_dict.iteritems():
-        # Get the fee values
-        fee = h5['fee_mean'].value
-        # Check which fee values are actually real
-        fee_valid = np.isfinite(fee)
-        # Implement a range selection of the valid fee values
-        fee_selection = fee_valid & (0.03 < fee) & (fee < 0.08)
-
-        # Fill the fee plot
-        if plot:
-            # Increment the plot number...
-            i_plot += 1
-            # ...and make the axis
-            ax = fee_fig.add_subplot(2, 3,  i_plot)
-            # Make fee histograms
-            _, bins, _ = ax.hist(fee[fee_valid], bins=100)
-            # and plot the result
-            ax.hist(fee[fee_selection], bins=bins)
-            ax.set_title('run {}'.format(run))
-
-        # Get the peak center of the fee filtered peaks
-        streak_center = h5['streak_peak_center'][fee_selection]
-        # Create a selection on the peak center based on the distribution
-        sc_mean = streak_center.mean()
-        sc_std = streak_center.std()
-        streak_selection = (
-            (sc_mean - 3*sc_std < h5['streak_peak_center'][:]) &
-            (h5['streak_peak_center'][:] < sc_mean + 3*sc_std))
-
-        # Get the corrected l3 energy
-        corrected_energy_l3 = h5['energy_L3_corrected_MeV'][fee_selection]
-        # and make a similar selection as above
-        cor_l3_mean = corrected_energy_l3.mean()
-        cor_l3_std = corrected_energy_l3.std()
-        cor_l3_selection = (
-            (cor_l3_mean - 3*cor_l3_std <
-             h5['energy_L3_corrected_MeV'][:]) &
-            (h5['energy_L3_corrected_MeV'][:] <
-             cor_l3_mean + 3*cor_l3_std))
-
-        # The total shot selection taked all the three above created selections
-        # into account
-        selection = fee_selection * streak_selection * cor_l3_selection
-
-        # Get the data for the selection
-        streak_center = h5['streak_peak_center'][selection]
-        streak_intensity = h5['streak_peak_integral'][selection]
-        energy_l3 = h5['raw/energy_L3_MeV'][selection]
-        energy_bc2 = h5['energy_BC2_MeV'][selection]
-        corrected_energy_l3 = h5['energy_L3_corrected_MeV'][selection]
-
-        # Append the data in the lists
-        e_energy.append(corrected_energy_l3)
-        l3_energy.append(energy_l3)
-        bc2_energy.append(energy_bc2)
-        p_energy_calib.extend([calib_energy_map[run]]*selection.sum())
-        tof.append(streak_center)
-        integral.append(streak_intensity)
-        pulse_energy.append(fee[selection])
-        color_param.append(h5['energy_BC2_MeV'][selection])
-        charge.append(h5['raw/charge_nC'][selection])
-        current_bc2.append(h5['raw/current_BC2_A'][selection])
-
-        # Populate the energy plot
-        if plot:
-            # Make the axis
-            ax = energy_fig.add_subplot(2, 3, i_plot)
-            energy_ax_list.append(ax)
-#            plt.plot(energy_l3, streak_center, '.')
-            plt.scatter(energy_l3, streak_center,
-                        s=1, c=fee[selection],
-                        linewidths=(0,), alpha=1)
-            if i_plot % 3 == 1:
-                plt.ylabel('Photoline center (us)')
-            if i_plot > 3:
-                plt.xlabel('L3 energy (MeV)')
-
-            ax.set_title('run {}'.format(run))
-            common_ax.plot(energy_l3, streak_center, '.')
-#                common_ax.plot(streak_center, corrected_energy_l3, '.')
-
-    # Convert the data lists to arrays
-    e_energy = np.concatenate(e_energy)
-    l3_energy = np.concatenate(l3_energy)
-    bc2_energy = np.concatenate(bc2_energy)
-    color_param = np.concatenate(color_param)
-    p_energy_calib = np.array(p_energy_calib)
-    tof = np.concatenate(tof)
-    integral = np.concatenate(integral)
-    pulse_energy = np.concatenate(pulse_energy)
-    charge = np.concatenate(charge)
-    current_bc2 = np.concatenate(current_bc2)
-
-    p_energy_axis = np.linspace(p_energy_calib.min() * 0.99,
-                                p_energy_calib.max() * 1.01,
-                                2**10)
-
-    if plot:
-        energy_ax_list.append(common_ax)
+    if verbose:
+        print 'Time to energy conversion fit results:'
+        lmfit.report_fit(res)
 
     # Select the parameters to be used in the tof time prediction calculation
     var_dict = {'l3_energy': l3_energy,
@@ -549,11 +495,21 @@ def fit_tof_prediction(plot=False):
 
     # Create the parameters for the tof prediction
     prediction_params = tof_prediction_params(**var_dict)
+    # Update the parameters from the time to energy conversion
+    for k, v in time_to_energy_params.iteritems():
+        k_pred = k
+        if k != 'IP':
+            k_pred += '_prediction'
+        prediction_params[k_pred].value = v.value
+#        prediction_params[k_pred].vary = False
     # Perform the fit
     res = lmfit.minimize(tof_prediction_model, prediction_params,
                          kws=var_dict)
+
     # Present the results
-    lmfit.report_fit(res)
+    if verbose:
+        print 'Tof prediction fit report:'
+        lmfit.report_fit(res)
 
     # Plot the differences between the measured tof and the predicted tof
     if plot:
@@ -562,19 +518,89 @@ def fit_tof_prediction(plot=False):
         plt.scatter(tof,
                     tof_prediction_model(prediction_params,
                                          **var_dict),
-                    s=1, c=current_bc2, linewidths=(0,))
+                    s=1, c=pulse_energy, linewidths=(0,))
         plt.xlabel('TOF (us)')
         plt.ylabel('TOF prediction error (us)')
+
+    # Look at the time to energy conversion
+    if plot:
+        time_axis = np.linspace(min(tof), max(tof), 2**8)
+        plt.figure('time to energy')
+        plt.clf()
+
+        combined_params = lmfit.Parameters()
+        for pars in [time_to_energy_params, prediction_params]:
+            for k, v in pars.iteritems():
+                combined_params.add(k, v.value)
+
+        plt.plot(
+            tof,
+            photoelectron_energy_prediction_model(combined_params, **var_dict),
+            '.', label='prediction + calibration')
+
+        plt.plot(tof, p_energy_calib - Ne1s, '.', label='calibration energies')
+
+        plt.plot(tof_mean, p_energy_calib_mean - Ne1s, 'o',
+                 label='calib energies, mean tof')
+
+        plt.plot(time_axis,
+                 photoelectron_energy_model(prediction_params,
+                                            time_axis,
+                                            postfix='_prediction'),
+                 label='t -> E tof prediction')
+
+        plt.plot(time_axis,
+                 photoelectron_energy_model(time_to_energy_params,
+                                            time_axis),
+                 label='t -> E calibration')
+
+        plt.xlabel('time (us)')
+        plt.ylabel('photo electron energy')
+        plt.legend(fontsize='medium')
+
+    return time_to_energy_params, prediction_params
 
 
 if __name__ == '__main__':
     verbose = 2
 
-#    energy_scale = np.linspace(40, 160, 2**8)
-#    M, time_scale, energy_scale, _ = make_tof_to_energy_matrix(
-#        energy_scale_eV=energy_scale, plot=True, verbose=2)
+#    calib_data = get_calib_data(plot=False)
 
-    fit_tof_prediction(plot=True)
+    energy_scale = np.linspace(40, 160, 2**8)
+    (M, time_scale, energy_scale,
+     params_time_to_energy,
+     params_tof_prediction) = make_tof_to_energy_matrix(
+        energy_scale_eV=energy_scale, plot=True, verbose=2)
+
+    h5 = process.load_file('h5_files/run117_all.h5', verbose=1)
+    process.list_hdf5_content(h5)
+    raw = h5['raw']
+    time_scale = raw['time_scale'][:]
+    time_signal_dset = h5['filtered_time_signal']
+    center_dset = h5['streak_peak_center']
+    n_events = len(raw['fiducial'])
+    energy_scale = h5['energy_scale_eV'][:]
+    energy_signal_dset = h5['energy_signal']
+    predicted_energy_dset = h5['photoelectron_energy_prediction_eV']
+
+    selected_shots = list(np.linspace(0, n_events, 10, endpoint=False))
+    plt.figure('time_traces')
+    plt.clf()
+    ax1 = plt.subplot(221)
+    ax2 = plt.subplot(222)
+    ax3 = plt.subplot(223)
+    ax4 = plt.subplot(224)
+    ax1.plot(time_scale, time_signal_dset[selected_shots, :].T)
+    ax2.plot(np.tile(time_scale, (len(selected_shots), 1)).T -
+             center_dset[selected_shots],
+             time_signal_dset[selected_shots, :].T)
+    ax3.plot(energy_scale, energy_signal_dset[selected_shots, :].T)
+    ax4.plot(np.tile(energy_scale, (len(selected_shots), 1)).T -
+             predicted_energy_dset[selected_shots],
+             energy_signal_dset[selected_shots, :].T)
+
+#    params_time_to_energy, params_tof_prediction = \
+#        fit_tof_prediction(plot=True, verbose=verbose)
 
 #    h5 = process.load_file('h5_files/run108_all.h5', verbose=1)
 #
