@@ -14,7 +14,7 @@ import process_hdf5 as process
 def max_value_position(x, y):
     return x[np.argmax(y)]
 
-h5 = process.load_file('h5_files/run109_all.h5', verbose=2)
+h5 = process.load_file('h5_files/run24_all.h5', verbose=2)
 process.list_hdf5_content(h5)
 
 fee_dset = h5['fee_mean']
@@ -59,9 +59,9 @@ for i, idx in enumerate(idx_list):
 
     plt.plot([peak_dset[idx]]*2, [0, max_value], '-.', label='h5 center')
 
-    plt.legend(loc='best', fontsize='small')
+    plt.legend(loc='best', fontsize='x-small')
 
-x_range = [1.59, 1.63]
+x_range = [1.59, 1.69]
 #x_range = [1.5, 1.7]
 ax.set_xlim(x_range)
 ax.set_xticks(np.linspace(x_range[0], x_range[1], 5))
