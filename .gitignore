@@ -57,3 +57,4 @@ target/
 data/
 *.h5
 scratch
+figures/
