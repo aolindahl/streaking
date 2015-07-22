@@ -10,9 +10,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import os
+import sys
 
 from aolPyModules import wiener, wavelet_filter
 import time_to_energy_conversion as tof_to_energy
+from aolPyModules import plotting as aol_plotting
 
 prompt_roi = [1.508, 1.535]
 streak_time_roi = [1.57, 1.66]
@@ -33,6 +35,7 @@ def update_progress(i_evt, n_events, verbose=True):
         num_squares = 40
         base_string = '\r[{:' + str(num_squares) + '}] {}%'
         print base_string.format('#'*(progress * num_squares / 100), progress),
+        sys.stdout.flush()
 
 
 def list_hdf5_content(group, indent='  '):
@@ -97,8 +100,11 @@ def construct_response(plot=False, verbose=0):
     runs = [132, 133, 134, 135, 136]
     if verbose > 0:
         print 'Loading Kr files for prompt determination.'
-    h5_list = [load_file(h5_file_name_template.format(run), verbose=verbose-1)
-               for run in runs]
+    h5_file_names = [h5_file_name_template.format(run) for run in runs]
+    h5_list = []
+    for file_name in h5_file_names:
+        update_internal_parameters(file_name, verbose=verbose)
+        h5_list.append(h5py.File(file_name, 'r+'))
     time_scale = h5_list[0]['raw/time_scale'].value
     response = np.zeros_like(time_scale)
     n_shots = 0
@@ -154,7 +160,7 @@ def get_nois_spectrum(plot=False, verbose=0):
                             print 'Nois was made earlier than the raw data in',
                             print 'the file', h5_name, 'Make new nois.'
                         break
-                    elif verbose:
+                    elif False:
                         print 'Nois was made later than the raw data in',
                         print 'the file', h5_name
 
@@ -168,6 +174,8 @@ def get_nois_spectrum(plot=False, verbose=0):
 
 def construct_nois_spectrum(plot=False, verbose=0):
     h5_file_names = get_file_names_for_noise_spectrum()
+    for file_name in h5_file_names:
+        update_internal_parameters(file_name)
     empty_shots = []
     for i, h5_name in enumerate(h5_file_names):
         with h5py.File(h5_name, 'r') as h5:
@@ -243,14 +251,15 @@ def check_tof_to_energy_conversion_matrix(plot=False, verbose=0):
             pass
     except IOError:
         if verbose:
-            print 'Could not open the file. Making the conversionmatrix.'
+            print 'Could not open the file. Making the conversion matrix.'
         construc_tof_to_energy_conversion_matrix(plot=plot, verbose=verbose)
 
     _, h5_dict, _ = tof_to_energy.load_tof_to_energy_data(verbose=verbose)
     with h5py.File(tof_to_energy_conversion_file_name, 'r') as trans_h5:
         if not older(
                 trans_h5['matrix'],
-                [h5['streak_peak_integral'] for h5 in h5_dict.itervalues()]):
+                [h5['streak_peak_integral'] for h5 in h5_dict.itervalues()] +
+                [Timer_object(1437117486)]):
             return
     if verbose:
         print 'Conversion to old, remaking it.'
@@ -258,8 +267,9 @@ def check_tof_to_energy_conversion_matrix(plot=False, verbose=0):
 
 
 def construc_tof_to_energy_conversion_matrix(plot=False, verbose=0):
-    M, t, E, params = tof_to_energy.make_tof_to_energy_matrix(
-        energy_scale_eV=energy_scale_eV, plot=plot, verbose=verbose)
+    M, t, E, time_to_energy_params, tof_prediction_params = \
+        tof_to_energy.make_tof_to_energy_matrix(
+            energy_scale_eV=energy_scale_eV, plot=plot, verbose=verbose)
     with h5py.File(tof_to_energy_conversion_file_name, 'w') as h5:
         dset = h5.create_dataset('matrix', data=M)
         dset.attrs.create('time_stamp', time.time())
@@ -267,14 +277,16 @@ def construc_tof_to_energy_conversion_matrix(plot=False, verbose=0):
         dset.attrs.create('time_stamp', time.time())
         dset = h5.create_dataset('energy_scale_eV', data=E)
         dset.attrs.create('time_stamp', time.time())
-        for k in params:
-            dset = h5.create_dataset(k, data=params[k])
+        for k in time_to_energy_params:
+            dset = h5.create_dataset(k, data=time_to_energy_params[k].value)
+            dset.attrs.create('time_stamp', time.time())
+        for k in tof_prediction_params:
+            dset = h5.require_dataset(k, (), np.float)
+            dset[()] = tof_prediction_params[k].value
             dset.attrs.create('time_stamp', time.time())
 
 
-def load_file(file_name, plot=False, verbose=0):
-    if verbose:
-        print 'Entering "load_file()" with file_name={}'.format(file_name)
+def open_hdf5_file(file_name, plot=False, verbose=0):
     try:
         # Open the file
         h5 = h5py.File(file_name, 'r+')
@@ -283,171 +295,13 @@ def load_file(file_name, plot=False, verbose=0):
             file_name)
         print 'Message was: {}'.format(e.message)
         return -1
-
-    raw_group = h5['raw']
-    n_events = raw_group['event_time_s'].shape[0]
-    raw_fee_dset = raw_group['FEE_energy_mJ']
-    time_scale = raw_group['time_scale'].value
-    streak_sl = slice(np.searchsorted(time_scale, streak_time_roi[0]),
-                      np.searchsorted(time_scale, streak_time_roi[1],
-                                      side='right'))
-    time_scale_streak = time_scale[streak_sl]
-    time_signal_dset = raw_group['time_signal']
-
-    if verbose > 0:
-        print 'File {} opened.'.format(h5.file)
-        print 'It contains', n_events, 'events.'
-    if verbose > 1:
-        list_hdf5_content(h5)
-
-    # Make the fee data set
-    fee_mean_dset = make_dataset(h5, 'fee_mean', (n_events,))
-    if older(fee_mean_dset, raw_group):
-        if verbose > 0:
-            print 'Updating fee mean dataset'
-        fee_mean_dset[:] = raw_fee_dset[:, 0: 4].mean(1)
-        fee_mean_dset.attrs[time_stamp] = time.time()
-
-    max_sig_dset = make_dataset(h5, 'max_signal', (n_events,))
-    if older(max_sig_dset, raw_group):
-        if verbose > 0:
-            print 'Get the maximum signal for each shot.'
-        max_sig_dset[:] = np.max(time_signal_dset, axis=1)
-        max_sig_dset.attrs['time_stamp'] = time.time()
-
-    spectrum_dset = make_dataset(h5, 'fft_spectrum_mean', time_scale.shape)
-    if older(spectrum_dset, [raw_group, max_sig_dset]):
-        if verbose:
-            print 'Compute the frequency spectrum of the data.'
-        max_signal = max_sig_dset.value
-        use = max_signal > np.sort(max_signal)[-500:][0]
-        signal = time_signal_dset[use, :]
-        spectrum_dset[:] = np.mean(np.abs(np.fft.fft(signal, axis=1))**2,
-                                   axis=0)
-        spectrum_dset.attrs['time_stamp'] = time.time()
-    freq_axis_dset = make_dataset(h5, 'fft_freq_axis', time_scale.shape)
-    if older(freq_axis_dset, raw_group):
-        if verbose:
-            print 'Updating the frequency axis.'
-        freq_axis_dset[:] = (np.linspace(0., 1e-3, len(time_scale)) /
-                             (time_scale[1] - time_scale[0]))
-        freq_axis_dset.attrs['time_stamp'] = time.time()
-
-    snr_dset = make_dataset(h5, 'snr_spectrum', time_scale.shape)
-    if older(snr_dset, [spectrum_dset, raw_group, Timer_object(1434015914)]):
-        if verbose:
-            print 'Updating the signal to nois ratio.'
-        snr_dset[:] = construct_snr_spectrum(h5, plot=plot)
-        snr_dset.attrs['time_stamp'] = time.time()
-
-    deconv_time_signal_dset = make_dataset(h5, 'filtered_time_signal',
-                                           time_signal_dset.shape)
-    if older(deconv_time_signal_dset, [raw_group, snr_dset]):
-        response, t_response = get_response(plot=plot, verbose=verbose-1)
-        if verbose:
-            print 'Deconvolving traces for {}.'.format(h5.filename),
-            print '{} events to process.'.format(n_events)
-        deconvolver = wiener.Deconcolver(snr_dset.value, response)
-        for i_evt in range(n_events):
-            deconv_time_signal_dset[i_evt, :] = deconvolver.deconvolve(
-                time_signal_dset[i_evt, :])
-            update_progress(i_evt, n_events, verbose)
-        print ''
-        deconv_time_signal_dset.attrs['time_stamp'] = time.time()
-
-    time_com_dset = make_dataset(h5, 'streak_peak_center', (n_events, ))
-    if older(time_com_dset, [deconv_time_signal_dset,
-                             Timer_object(1434036256)]):
-        if verbose:
-            print 'Calculating streak peak center in time.'
-        for i_evt in range(n_events):
-            time_com_dset[i_evt] = get_com(
-                time_scale_streak,
-                deconv_time_signal_dset[i_evt, streak_sl])
-            update_progress(i_evt, n_events, verbose)
-        if verbose:
-            print ''
-        time_com_dset.attrs['time_stamp'] = time.time()
-
-    photo_line_intensity_dset = make_dataset(h5, 'streak_peak_integral',
-                                             (n_events, ))
-    if older(photo_line_intensity_dset, deconv_time_signal_dset):
-        if verbose:
-            print 'Calculating photo line integral in time domain.'
-        for i_evt in range(n_events):
-            streak_sig = deconv_time_signal_dset[i_evt, streak_sl]
-            center, width = fwxm(time_scale_streak,
-                                 streak_sig,
-                                 fraction=0.5)
-            lo = center - width
-            hi = center + width
-            t_start = np.searchsorted(time_scale_streak, lo)
-            t_end = np.searchsorted(time_scale_streak, hi)
-            t = np.empty((2 + t_end - t_start, ))
-            t[[0, -1]] = lo, hi
-            t[1:-1] = time_scale_streak[t_start: t_end]
-            sig = np.empty_like(t)
-            sig[[0, -1]] = np.interp(t[[0, -1]], time_scale_streak,
-                                     streak_sig)
-            sig[1:-1] = streak_sig[t_start:t_end]
-            photo_line_intensity_dset[i_evt] = np.trapz(sig, t)
-            update_progress(i_evt, n_events, verbose)
-        if verbose:
-            print ''
-        photo_line_intensity_dset.attrs['time_stamp'] = time.time()
-
-    bc2_energy_dset = make_dataset(h5, 'energy_BC2_MeV', (n_events, ))
-    if older(bc2_energy_dset, raw_group):
-        if verbose:
-            print 'Calculating BC2 energy for the bpm reading.'
-        # Values comes from a mail from Timothy Maxwell
-        # The nominal BC2 energy is 5 GeV (was at least when this data was
-        # recorded). The measurement is the relative offset of the beam
-        # position in a BPM. The dispersion value is -364.7 mm.
-        bc2_energy_dset[:] = 5e3 * (1. - raw_group['position_BC2_mm'][:] /
-                                    364.7)
-        bc2_energy_dset.attrs['time_stamp'] = time.time()
-
-    l3_energy_cor_dset = make_dataset(h5, 'energy_L3_corrected_MeV',
-                                      (n_events, ))
-    if older(l3_energy_cor_dset, [raw_group, bc2_energy_dset,
-                                  Timer_object(1434096408)]):
-        if verbose:
-            print 'Calculating corrected L3 energy.'
-        l3_energy_cor_dset[:] = (raw_group['energy_L3_MeV'][:] -
-                                 (bc2_energy_dset[:] - 5000))
-        l3_energy_cor_dset.attrs['time_stamp'] = time.time()
-
-    energy_scale_dset = make_dataset(h5, 'energy_scale_eV',
-                                     energy_scale_eV.shape)
-    energy_trace_dset = make_dataset(h5, 'energy_signal',
-                                     (n_events, len(energy_scale_eV)))
-    if verbose:
-        print 'Checking the time to energy conversion time stamp validity.'
-    check_tof_to_energy_conversion_matrix()
-    with h5py.File(tof_to_energy_conversion_file_name, 'r') as tof_to_e_h5:
-        if older(energy_scale_dset, [tof_to_e_h5['matrix'],
-                                     deconv_time_signal_dset]):
-            M = tof_to_e_h5['matrix'].value
-            energy_scale_dset[:] = tof_to_e_h5['energy_scale_eV'].value
-            energy_scale_dset.attrs['time_stamp'] = time.time()
-            if verbose:
-                print 'Computing energy spectra.'
-            for i_evt in range(n_events):
-                energy_trace_dset[i_evt, :] = M.dot(
-                    deconv_time_signal_dset[i_evt, :])
-                update_progress(i_evt, n_events, verbose)
-            if verbose:
-                print ''
-            energy_trace_dset.attrs['time_stamp'] = time.time()
-
     return h5
 
 
 def get_com(x, y):
-    idx_l, idx_h = fwxm(x, y, 0.2, return_data='idx')
+    idx_l, idx_h = fwxm(x, y, 0.0, return_data='idx')
     sl = slice(idx_l, idx_h)
-    return (x[sl] * y[sl]).sum() / y[sl].sum()
+    return ((x[sl] * y[sl]).sum()) / (y[sl].sum())
 
 
 def fwxm(x, y, fraction=0.5, return_data=''):
@@ -479,7 +333,387 @@ def fwxm(x, y, fraction=0.5, return_data=''):
     return (x[idx_low] + x[idx_high]) / 2, x[idx_high] - x[idx_low]
 
 
-def touch_all_files(verbose=0):
+def get_trace_bounds(x, y,
+                     threshold=0.0, min_width=2,
+                     energy_offset=0,
+                     useRel=False, threshold_rel=0.5,
+                     roi=slice(None)):
+
+    amp = y[roi]
+    dx = np.mean(np.diff(x))
+
+    if useRel:
+        threshold_temp = threshold_rel * np.max(amp[np.isfinite(amp)])
+        if threshold_temp < threshold:
+            return [np.nan] * 3
+        else:
+            threshold_V = threshold_temp
+    nPoints = np.round(min_width/dx)
+
+    min = 0
+    for i in range(1, amp.size):
+        if amp[i] < threshold_V:
+            min = i
+            continue
+        if i-min >= nPoints:
+            break
+    else:
+        return [np.nan] * 3
+
+    max = amp.size - 1
+    for i in range(amp.size-1, -1, -1):
+        if amp[i] < threshold_V:
+            max = i
+            continue
+        if max-i >= nPoints:
+            break
+    else:
+        return [np.nan] * 3
+
+    if min == 0 and max == amp.size - 1:
+        return [np.nan] * 3
+
+    # print 'min =', min, 'max =', max
+    min = x[roi][min]
+    max = x[roi][max]
+
+    return min, max, threshold_V
+
+
+def update_internal_parameters(file_name, plot=False, verbose=0):
+    if verbose:
+        print 'Entering "update_internal_parameters()" ',
+        print 'with file_name={}'.format(file_name)
+
+    h5 = open_hdf5_file(file_name, plot, verbose)
+    raw_group = h5['raw']
+    n_events = raw_group['event_time_s'].shape[0]
+
+    # Make the fee data set
+    raw_fee_dset = raw_group['FEE_energy_mJ']
+    fee_mean_dset = make_dataset(h5, 'fee_mean', (n_events,))
+    if older(fee_mean_dset, raw_group):
+        if verbose > 0:
+            print 'Updating fee mean dataset'
+        fee_mean_dset[:] = raw_fee_dset[:, 0: 4].mean(1)
+        fee_mean_dset.attrs[time_stamp] = time.time()
+
+    # Make max signal dataset
+    time_signal_dset = raw_group['time_signal']
+    max_sig_dset = make_dataset(h5, 'max_signal', (n_events,))
+    if older(max_sig_dset, raw_group):
+        if verbose > 0:
+            print 'Get the maximum signal for each shot.'
+        max_sig_dset[:] = np.max(time_signal_dset, axis=1)
+        max_sig_dset.attrs['time_stamp'] = time.time()
+
+    # Make the frequency spectrum
+    time_scale = raw_group['time_scale'].value
+    spectrum_dset = make_dataset(h5, 'fft_spectrum_mean', time_scale.shape)
+    if older(spectrum_dset, [raw_group, max_sig_dset]):
+        if verbose:
+            print 'Compute the frequency spectrum of the data.'
+        max_signal = max_sig_dset.value
+        use = max_signal > np.sort(max_signal)[-500:][0]
+        signal = time_signal_dset[use, :]
+        spectrum_dset[:] = np.mean(np.abs(np.fft.fft(signal, axis=1))**2,
+                                   axis=0)
+        spectrum_dset.attrs['time_stamp'] = time.time()
+    freq_axis_dset = make_dataset(h5, 'fft_freq_axis', time_scale.shape)
+    if older(freq_axis_dset, raw_group):
+        if verbose:
+            print 'Updating the frequency axis.'
+        freq_axis_dset[:] = (np.linspace(0., 1e-3, len(time_scale)) /
+                             (time_scale[1] - time_scale[0]))
+        freq_axis_dset.attrs['time_stamp'] = time.time()
+
+    # Calculate the BC2 energy
+    bc2_energy_dset = make_dataset(h5, 'energy_BC2_MeV', (n_events, ))
+    if older(bc2_energy_dset, raw_group):
+        if verbose:
+            print 'Calculating BC2 energy for the bpm reading.'
+        # Values comes from a mail from Timothy Maxwell
+        # The nominal BC2 energy is 5 GeV (was at least when this data was
+        # recorded). The measurement is the relative offset of the beam
+        # position in a BPM. The dispersion value is -364.7 mm.
+        bc2_energy_dset[:] = 5e3 * (1. - raw_group['position_BC2_mm'][:] /
+                                    364.7)
+        bc2_energy_dset.attrs['time_stamp'] = time.time()
+
+    # Calculate the corrected L3 energy
+    l3_energy_cor_dset = make_dataset(h5, 'energy_L3_corrected_MeV',
+                                      (n_events, ))
+    if older(l3_energy_cor_dset, [raw_group, bc2_energy_dset,
+                                  Timer_object(1434096408)]):
+        if verbose:
+            print 'Calculating corrected L3 energy.'
+        l3_energy_cor_dset[:] = (raw_group['energy_L3_MeV'][:] -
+                                 (bc2_energy_dset[:] - 5000))
+        l3_energy_cor_dset.attrs['time_stamp'] = time.time()
+
+    h5.close()
+
+
+def update_with_noise_and_response(file_name, plot=False, verbose=0):
+    if verbose:
+        print 'Entering "update_with_noise_and_response()" ',
+        print 'with file_name={}'.format(file_name)
+
+    update_internal_parameters(file_name, plot, verbose)
+
+    h5 = open_hdf5_file(file_name, plot, verbose)
+    raw_group = h5['raw']
+    n_events = raw_group['event_time_s'].shape[0]
+    time_scale = raw_group['time_scale'].value
+
+    # Make signal to nois ratio
+    snr_dset = make_dataset(h5, 'snr_spectrum', time_scale.shape)
+    spectrum_dset = h5['fft_spectrum_mean']
+    if older(snr_dset, [spectrum_dset, raw_group, Timer_object(1434015914)]):
+        if verbose:
+            print 'Updating the signal to nois ratio.'
+        snr_dset[:] = construct_snr_spectrum(h5, plot=plot)
+        snr_dset.attrs['time_stamp'] = time.time()
+
+    # Deconvolute the response function
+    time_signal_dset = raw_group['time_signal']
+    deconv_time_signal_dset = make_dataset(h5, 'filtered_time_signal',
+                                           time_signal_dset.shape)
+    if older(deconv_time_signal_dset, [raw_group, snr_dset]):
+        response, t_response = get_response(plot=plot, verbose=verbose-1)
+        if verbose:
+            print 'Deconvolving traces for {}.'.format(h5.filename),
+            print '{} events to process.'.format(n_events)
+        deconvolver = wiener.Deconcolver(snr_dset.value, response)
+        for i_evt in range(n_events):
+            deconv_time_signal_dset[i_evt, :] = deconvolver.deconvolve(
+                time_signal_dset[i_evt, :])
+            update_progress(i_evt, n_events, verbose)
+        print ''
+        deconv_time_signal_dset.attrs['time_stamp'] = time.time()
+
+    # Calculate the center of mass of the streak peak
+    time_com_dset = make_dataset(h5, 'streak_peak_center', (n_events, ))
+    if older(time_com_dset, [deconv_time_signal_dset,
+                             Timer_object(1437488661)]):
+        if verbose:
+            print 'Calculating streak peak center in time.'
+        streak_sl = slice(np.searchsorted(time_scale, streak_time_roi[0]),
+                          np.searchsorted(time_scale, streak_time_roi[1],
+                                          side='right'))
+        time_scale_streak = time_scale[streak_sl]
+        for i_evt in range(n_events):
+            time_com_dset[i_evt] = get_com(
+                time_scale_streak,
+                deconv_time_signal_dset[i_evt, streak_sl])
+            update_progress(i_evt, n_events, verbose)
+        if verbose:
+            print ''
+        time_com_dset.attrs['time_stamp'] = time.time()
+
+    # Calculate the photo line intensity
+    photo_line_intensity_dset = make_dataset(h5, 'streak_peak_integral',
+                                             (n_events, ))
+    if older(photo_line_intensity_dset, deconv_time_signal_dset):
+        if verbose:
+            print 'Calculating photo line integral in time domain.'
+        for i_evt in range(n_events):
+            streak_sig = deconv_time_signal_dset[i_evt, streak_sl]
+            center, width = fwxm(time_scale_streak,
+                                 streak_sig,
+                                 fraction=0.5)
+            lo = center - width
+            hi = center + width
+            t_start = np.searchsorted(time_scale_streak, lo)
+            t_end = np.searchsorted(time_scale_streak, hi)
+            t = np.empty((2 + t_end - t_start, ))
+            t[[0, -1]] = lo, hi
+            t[1:-1] = time_scale_streak[t_start: t_end]
+            sig = np.empty_like(t)
+            sig[[0, -1]] = np.interp(t[[0, -1]], time_scale_streak,
+                                     streak_sig)
+            sig[1:-1] = streak_sig[t_start:t_end]
+            photo_line_intensity_dset[i_evt] = np.trapz(sig, t)
+            update_progress(i_evt, n_events, verbose)
+        if verbose:
+            print ''
+        photo_line_intensity_dset.attrs['time_stamp'] = time.time()
+
+    h5.close()
+
+
+def load_file(file_name, plot=False, verbose=0):
+    if verbose:
+        print 'Entering "load_file()" with file_name={}'.format(file_name)
+
+    update_with_noise_and_response(file_name, plot, verbose)
+
+    h5 = open_hdf5_file(file_name, plot, verbose)
+    raw_group = h5['raw']
+    n_events = raw_group['event_time_s'].shape[0]
+
+    deconv_time_signal_dset = h5['filtered_time_signal']
+
+    energy_scale_dset = make_dataset(h5, 'energy_scale_eV',
+                                     energy_scale_eV.shape)
+    energy_trace_dset = make_dataset(h5, 'energy_signal',
+                                     (n_events, len(energy_scale_eV)))
+    pe_energy_prediction_dset = make_dataset(
+        h5, 'photoelectron_energy_prediction_eV', (n_events,))
+
+    if verbose:
+        print 'Checking the time to energy conversion time stamp validity.'
+    check_tof_to_energy_conversion_matrix(verbose=verbose-1)
+    with h5py.File(tof_to_energy_conversion_file_name, 'r') as tof_to_e_h5:
+        if (older(energy_scale_dset, [tof_to_e_h5['matrix'],
+                                      deconv_time_signal_dset,
+                                      Timer_object(1437058277)]) or
+            older(pe_energy_prediction_dset, [tof_to_e_h5['matrix'],
+                                              deconv_time_signal_dset,
+                                              Timer_object(1437058277)])):
+            # Get the transformation matrix from file
+            M = tof_to_e_h5['matrix'].value
+            # Update the energy scale
+            energy_scale_dset[:] = tof_to_e_h5['energy_scale_eV'].value
+            energy_scale_dset.attrs['time_stamp'] = time.time()
+            # Get the photon energy prediction parameters
+            params = (tof_to_energy.photon_energy_params() +
+                      tof_to_energy.tof_prediction_params())
+            for k in params:
+                params[k].value = tof_to_e_h5[k].value
+            if verbose:
+                print 'Computing energy spectra.'
+            for i_evt in range(n_events):
+                # Energy spectra
+                energy_trace_dset[i_evt, :] = M.dot(
+                    deconv_time_signal_dset[i_evt, :])
+                update_progress(i_evt, n_events, verbose)
+            if verbose:
+                print ''
+            energy_trace_dset.attrs['time_stamp'] = time.time()
+
+            if verbose:
+                print 'Computing photon energy.'
+            pe_energy_prediction_dset[:] = \
+                tof_to_energy.photoelectron_energy_prediction_model(
+                    params,
+                    l3_energy=raw_group['energy_L3_MeV'].value,
+                    bc2_energy=h5['energy_BC2_MeV'].value,
+                    fee=h5['fee_mean'].value)
+            pe_energy_prediction_dset.attrs['time_stamp'] = time.time()
+
+    # Calculate energy trace properties
+    spectral_properties_group = h5.require_group('spectral_properties')
+    spectral_center_dset = make_dataset(spectral_properties_group,
+                                        'center_eV', (n_events, ))
+    spectral_width_dset = make_dataset(spectral_properties_group,
+                                       'width_eV', (n_events, ))
+    spectral_threshold_dset = make_dataset(spectral_properties_group,
+                                           'threshold', (n_events, ))
+
+    if older(spectral_center_dset, [energy_trace_dset,
+                                    Timer_object(1437379331)]):
+        energy_scale = energy_scale_dset[:]
+        sl = slice(np.searchsorted(energy_scale, 75),
+                   np.searchsorted(energy_scale, 125))
+        energy_scale = energy_scale[sl]
+        if verbose:
+            'Calculating spectral center and width:'
+        for i_evt in range(n_events):
+            photon_energy = pe_energy_prediction_dset[i_evt]
+            t_start, t_end, spectral_threshold_dset[i_evt] = \
+                get_trace_bounds(energy_scale - photon_energy,
+                                 energy_trace_dset[i_evt, sl],
+                                 threshold=1e-4,
+                                 min_width=2,
+                                 useRel=True,
+                                 threshold_rel=0.4)
+            spectral_center_dset[i_evt] = (t_start + t_end) / 2
+            spectral_width_dset[i_evt] = t_end - t_start
+            update_progress(i_evt, n_events, verbose)
+        spectral_center_dset.attrs['time_stamp'] = time.time()
+        spectral_width_dset.attrs['time_stamp'] = time.time()
+        spectral_threshold_dset.attrs['time_stamp'] = time.time()
+
+    if plot:
+        selected_shots = list(np.linspace(0, n_events, 16, endpoint=False))
+        plt.figure('peak properties')
+        plt.clf()
+        energy_scale = energy_scale_dset[:]
+        sl = slice(np.searchsorted(energy_scale, 75),
+                   np.searchsorted(energy_scale, 125))
+        energy_scale = energy_scale[sl]
+        for i, shot in enumerate(selected_shots):
+            energy_trace = energy_trace_dset[shot, :]
+            plt.subplot(4, 4, i+1)
+            plt.plot(energy_scale - pe_energy_prediction_dset[shot],
+                     energy_trace[sl])
+            c = spectral_center_dset[shot]
+            w = spectral_width_dset[shot]
+            th = spectral_threshold_dset[shot]
+            plt.plot([c-w/2, c+w/2], [th] * 2)
+
+    n_spectral_center_bins = 2**6
+    n_spectral_width_bins = 2**6
+    spectral_center_axis_dset = make_dataset(spectral_properties_group,
+                                             'center_axis_eV',
+                                             (n_spectral_center_bins, ))
+    spectral_width_axis_dset = make_dataset(spectral_properties_group,
+                                            'width_axis_eV',
+                                            (n_spectral_width_bins, ))
+    spectral_histogram_dset = make_dataset(spectral_properties_group,
+                                           'histogram',
+                                           (n_spectral_width_bins,
+                                            n_spectral_center_bins))
+
+    if older(spectral_histogram_dset, [spectral_center_dset,
+                                       spectral_width_dset,
+                                       Timer_object(1437380252)]):
+        if verbose:
+            print 'Making the christmas tree plot.'
+        # Make the spectral properties histogram
+#        spectral_width_axis_dset[:] = np.linspace(
+#            np.nanmin(spectral_width_dset),
+#            np.nanmax(spectral_width_dset),
+#            n_spectral_width_bins)
+        spectral_width_axis_dset[:] = np.linspace(0, 25, n_spectral_width_bins)
+        spectral_width_axis_dset.attrs['time_stamp'] = time.time()
+#        spectral_center_axis_dset[:] = np.linspace(
+#            np.nanmin(spectral_center_dset),
+#            np.nanmax(spectral_center_dset),
+#            n_spectral_center_bins)
+        spectral_center_axis_dset[:] = np.linspace(-10, 10,
+                                                   n_spectral_center_bins)
+        spectral_center_axis_dset.attrs['time_stamp'] = time.time()
+
+        hist = aol_plotting.center_histogram_2d(
+            spectral_center_dset[:], spectral_width_dset[:],
+            spectral_center_axis_dset[:], spectral_width_axis_dset[:])
+        hist[hist == 0] = np.nan
+        spectral_histogram_dset[:] = hist
+        spectral_histogram_dset.attrs['time_stamp'] = time.time()
+
+    if plot:
+        plt.figure('christmas tree {}'.format(h5.filename.split('/')[-1]))
+        plt.clf()
+        ax = plt.imshow(spectral_histogram_dset[:], aspect='auto',
+                        interpolation='none', origin='lower',
+                        extent=(np.min(spectral_center_axis_dset),
+                                np.max(spectral_center_axis_dset),
+                                np.min(spectral_width_axis_dset),
+                                np.max(spectral_width_axis_dset)))
+        plt.colorbar()
+
+    if verbose > 0:
+        print 'File {} processed.'.format(h5.file)
+        print 'It contains', n_events, 'events.'
+    if verbose > 1:
+        list_hdf5_content(h5)
+
+    return h5
+
+
+def touch_all_files(verbose=2):
     file_names = ['/'.join([data_dir, f]) for f in os.listdir(data_dir) if
                   f.startswith('run') and f.endswith('_all.h5')]
 
@@ -512,7 +746,7 @@ if __name__ == '__main__':
 
     if verbose:
         print 'Load the requested file: {}'.format(hdf5_file)
-    h5 = load_file(hdf5_file, verbose=verbose)
+    h5 = load_file(hdf5_file, verbose=verbose, plot=plot)
 
     # Get the raw group
     raw_group = h5['raw']
@@ -594,3 +828,37 @@ if __name__ == '__main__':
         plt.plot(raw_time, deconv_mean_tr,
                  label='Deconv mean')
         plt.legend(loc='best')
+
+    # Plot the phase cavity times
+    pct = raw_group['phase_cavity_times']
+    plt.figure('Phase cavity times')
+    plt.clf()
+    pc_selection = (np.isfinite(np.sum(pct, axis=1)) &
+                    (pct[:, 0] > -2) & (pct[:, 0] < 2) &
+                    (pct[:, 1] > -2) & (pct[:, 1] < 2))
+#                    (pct[:, 0] > -50) & (pct[:, 0] < 50))
+
+    for i in range(2):
+        plt.subplot(1, 3, i+1)
+        plt.title('Time {}'.format(i))
+        hist, hist_edges = np.histogram(pct[pc_selection, i], bins=100)
+        plt.bar(hist_edges[: -1], hist, width=np.diff(hist_edges))
+
+    plt.subplot(133)
+    plt.plot(pct[pc_selection, 0], pct[pc_selection, 1], '.')
+
+    # Plot energy traces and photon energy diagnostics
+    pe_energy_dset = h5['photoelectron_energy_prediction_eV']
+    energy_scale = h5['energy_scale_eV'][:]
+    energy_signal_dset = h5['energy_signal']
+    selected_shots = np.linspace(0, n_events, 100, endpoint=False, dtype=int)
+    plt.figure('Energy spectra')
+    plt.clf()
+    ax1 = plt.subplot(121)
+    ax2 = plt.subplot(122)
+    dy = 1e-5
+    for i, shot in enumerate(selected_shots):
+        ax1.plot(energy_scale, energy_signal_dset[shot, :] + dy * i)
+        ax2.plot(energy_scale - pe_energy_dset[shot],
+                 energy_signal_dset[shot, :] + dy * i)
+    ax2.set_xlim(-20, 25)
