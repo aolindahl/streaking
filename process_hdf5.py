@@ -299,9 +299,9 @@ def open_hdf5_file(file_name, plot=False, verbose=0):
 
 
 def get_com(x, y):
-    idx_l, idx_h = fwxm(x, y, 0.2, return_data='idx')
+    idx_l, idx_h = fwxm(x, y, 0.0, return_data='idx')
     sl = slice(idx_l, idx_h)
-    return (x[sl] * y[sl]).sum() / y[sl].sum()
+    return ((x[sl] * y[sl]).sum()) / (y[sl].sum())
 
 
 def fwxm(x, y, fraction=0.5, return_data=''):
@@ -493,15 +493,15 @@ def update_with_noise_and_response(file_name, plot=False, verbose=0):
         deconv_time_signal_dset.attrs['time_stamp'] = time.time()
 
     # Calculate the center of mass of the streak peak
-    streak_sl = slice(np.searchsorted(time_scale, streak_time_roi[0]),
-                      np.searchsorted(time_scale, streak_time_roi[1],
-                                      side='right'))
-    time_scale_streak = time_scale[streak_sl]
     time_com_dset = make_dataset(h5, 'streak_peak_center', (n_events, ))
     if older(time_com_dset, [deconv_time_signal_dset,
-                             Timer_object(1434036256)]):
+                             Timer_object(1437488661)]):
         if verbose:
             print 'Calculating streak peak center in time.'
+        streak_sl = slice(np.searchsorted(time_scale, streak_time_roi[0]),
+                          np.searchsorted(time_scale, streak_time_roi[1],
+                                          side='right'))
+        time_scale_streak = time_scale[streak_sl]
         for i_evt in range(n_events):
             time_com_dset[i_evt] = get_com(
                 time_scale_streak,
@@ -563,7 +563,7 @@ def load_file(file_name, plot=False, verbose=0):
 
     if verbose:
         print 'Checking the time to energy conversion time stamp validity.'
-    check_tof_to_energy_conversion_matrix()
+    check_tof_to_energy_conversion_matrix(verbose=verbose-1)
     with h5py.File(tof_to_energy_conversion_file_name, 'r') as tof_to_e_h5:
         if (older(energy_scale_dset, [tof_to_e_h5['matrix'],
                                       deconv_time_signal_dset,
