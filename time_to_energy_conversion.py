@@ -16,6 +16,75 @@ from aolPyModules.aolUtil import struct
 Ne1s = 870.2
 
 
+def e_energy_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
+                              e_energy=None):
+    """Modeling of the electorn energy based on a few parameters."""
+
+    K = params['K'].value
+    IP = params['IP'].value
+    BC2_nominal = params['BC2_nominal'].value
+    BC2_factor = params['BC2_factor'].value
+    fee_factor = params['fee_factor'].value
+    fee_nominal = params['fee_nominal'].value
+
+    if bc2_energy is None:
+        e_beam_energy = l3_energy
+    else:
+        e_beam_energy = l3_energy - BC2_factor * (bc2_energy - BC2_nominal)
+
+    if fee is not None:
+        e_beam_energy -= fee_factor * (fee - fee_nominal)
+
+    mod = K * e_beam_energy**2 - IP
+
+    if e_energy is None:
+        return mod
+    return mod - e_energy
+
+#    mod = params['e_0'].value
+#    mod += params['l3_1'].value * (l3_energy - params['l3_m'].value)
+#
+#    if bc2_energy is not None:
+#        mod += params['bc2_1'].value * (bc2_energy - params['bc2_m'].value)
+##
+#    if fee is not None:
+#        mod += params['fee_1'].value * (fee - params['fee_m'].value)
+#
+#    if e_energy is None:
+#        return mod
+#    return mod - e_energy
+
+
+def e_energy_prediction_model_start_params(l3_energy, e_energy,
+                                           bc2_energy=[], fee=[]):
+    params = lmfit.Parameters()
+    params.add('K', 4.57e-5, min=4.3e-5, max=1e-4)
+
+    use_bc2 = len(bc2_energy) > 0
+    params.add('BC2_nominal', 5e3, min=4.9e3, max=5.1e3, vary=use_bc2)
+    params.add('BC2_factor', 1, min=0, max=2, vary=use_bc2)
+
+    use_fee = len(fee) > 0
+    params.add('fee_factor', 108 if use_fee else 0, vary=use_fee)
+    params.add('fee_nominal', np.nanmean(fee) if use_fee else 0, vary=use_fee)
+
+    params.add('IP', value=Ne1s, vary=False)
+
+#    params.add('e_0', np.mean(e_energy), vary=False)
+#    params.add('l3_1', 0)
+#    params.add('l3_m', np.mean(l3_energy), vary=False)
+#
+#    use_bc2 = len(bc2_energy) > 0
+#    params.add('bc2_1', 0, vary=use_bc2)
+#    params.add('bc2_m', np.mean(bc2_energy) if use_bc2 else 0, vary=False)
+#
+#    use_fee = len(fee) > 0
+#    params.add('fee_1', 0, vary=use_fee)
+#    params.add('fee_m', np.mean(fee) if use_fee else 0, vary=False)
+
+    return params
+
+
 def tof_prediction_model(params, l3_energy, bc2_energy=None, fee=None,
                          tof=None):
     d_eff = params['d_eff_prediction'].value
@@ -202,8 +271,8 @@ def slicing_plot(x, y, z, n_z=6, fig_num=None):
 
 
 def load_tof_to_energy_data(verbose=0):
-    if verbose > 0:
-        print 'In "load_tof_to_energy_data()".'
+#    if verbose > 0:
+#        print 'In "load_tof_to_energy_data()".'
     calib_runs = [24, 26, 28, 31, 38]
     calib_energies = [930, 950, 970, 1000, 1030]
     calib_energy_map = dict(zip(calib_runs, calib_energies))
@@ -235,7 +304,7 @@ def get_calib_data(plot=False, verbose=0):
     calib_data.l3_energy = []
     calib_data.bc2_energy = []
     calib_data.charge = []
-#    current_bc2 = []
+    calib_data.current_bc2 = []
 #    pct = []
 
     if plot:
@@ -258,7 +327,9 @@ def get_calib_data(plot=False, verbose=0):
         # Check which fee values are actually real
         fee_valid = np.isfinite(fee)
         # Implement a range selection of the valid fee values
-        fee_selection = fee_valid & (0.03 < fee) & (fee < 0.08)
+#        fee_selection = fee_valid & (0.03 < fee) & (fee < 0.08)
+#        fee_selection = fee_valid & (0 < fee) & (fee < 10)
+        fee_selection = fee_valid & (0.04 < fee) & (fee < 0.06)
 
         # Fill the fee plot
         if plot:
@@ -307,7 +378,7 @@ def get_calib_data(plot=False, verbose=0):
         calib_data.integral.append(h5['streak_peak_integral'][selection])
         calib_data.pulse_energy.append(fee[selection])
         calib_data.charge.append(h5['raw/charge_nC'][selection])
-#        current_bc2.append(h5['raw/current_BC2_A'][selection])
+        calib_data.current_bc2.append(h5['raw/current_BC2_A'][selection])
 #        pct.append(h5['raw/phase_cavity_times'][selection, 1])
 #        pct[-1] -= pct[-1][np.isfinite(pct[-1])].mean()
 
@@ -419,22 +490,24 @@ def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
     if plot:
         plt.figure('intensity')
         plt.clf()
-        plt.subplot(131)
+        ax1 = plt.subplot(131)
         plt.plot(tof, integral, '.', label='direct integral')
         plt.xlabel('tof')
         plt.ylabel('peak integral')
+        plt.legend(fontsize='medium')
 
-        plt.subplot(132)
-        plt.plot(tof, integral/pulse_energy, '.', label='raw')
-        plt.plot(tof_axis, np.polyval(trans_p, tof_axis), '-',
+        ax2 = plt.subplot(132, sharex=ax1)
+        plt.plot(tof, integral/pulse_energy, '.', label='raw (integral / fee)')
+        plt.plot(tof_axis, np.polyval(trans_p, tof_axis), '-c',
                  label='polynomial fit')
         plt.plot(tof_axis,
                  trans_model.eval(x=tof_axis, **trans_result.best_values),
                  label='fit to raw')
         plt.xlabel('tof')
         plt.ylabel('fee normalized peak integral')
+        plt.legend(fontsize='medium')
 
-        plt.subplot(133)
+        plt.subplot(133, sharex=ax2, sharey=ax2)
         plt.plot(tof_binned_norm_int, binned_norm_int, '.',
                  label='binned data')
         plt.plot(tof_axis,
@@ -445,6 +518,10 @@ def make_tof_to_energy_matrix(energy_scale_eV, plot=False, verbose=0):
                  label='fit to binned')
         plt.xlabel('tof')
         plt.ylabel('fee normalized peak integral')
+        plt.legend(fontsize='medium')
+        plt.ylim(0, 0.11)
+
+        plt.savefig('figures/timeToEnergyIntensity.png')
 
     transmission_factors = 1. / trans_model.eval(x=time_scale,
                                                  **binned_result.best_values)
@@ -521,6 +598,9 @@ def fit_tof_prediction(plot=False, verbose=0):
                     s=1, c=pulse_energy, linewidths=(0,))
         plt.xlabel('TOF (us)')
         plt.ylabel('TOF prediction error (us)')
+        cbar = plt.colorbar()
+        cbar.set_label('fee (mJ)')
+        plt.savefig('figures/tof_prediction.png')
 
     # Look at the time to energy conversion
     if plot:
@@ -533,21 +613,22 @@ def fit_tof_prediction(plot=False, verbose=0):
             for k, v in pars.iteritems():
                 combined_params.add(k, v.value)
 
-        plt.plot(
-            tof,
-            photoelectron_energy_prediction_model(combined_params, **var_dict),
-            '.', label='prediction + calibration')
+#        plt.plot(
+#            tof,
+#            photoelectron_energy_prediction_model(combined_params, **var_dict),
+#            '.', label='prediction + calibration')
 
-        plt.plot(tof, p_energy_calib - Ne1s, '.', label='calibration energies')
+        plt.plot(tof, p_energy_calib - Ne1s, '.',
+                 label='Set $E_p - E_{Ne\,1s} = E_e$ vs. TOF')
 
         plt.plot(tof_mean, p_energy_calib_mean - Ne1s, 'o',
-                 label='calib energies, mean tof')
+                 label='$E_e$v s. mean TOF')
 
-        plt.plot(time_axis,
-                 photoelectron_energy_model(prediction_params,
-                                            time_axis,
-                                            postfix='_prediction'),
-                 label='t -> E tof prediction')
+#        plt.plot(time_axis,
+#                 photoelectron_energy_model(prediction_params,
+#                                            time_axis,
+#                                            postfix='_prediction'),
+#                 label='t -> E tof prediction')
 
         plt.plot(time_axis,
                  photoelectron_energy_model(time_to_energy_params,
@@ -555,8 +636,11 @@ def fit_tof_prediction(plot=False, verbose=0):
                  label='t -> E calibration')
 
         plt.xlabel('time (us)')
-        plt.ylabel('photo electron energy')
+        plt.ylabel('photo electron energy (eV)')
         plt.legend(fontsize='medium')
+        plt.grid(True)
+
+        plt.savefig('figures/timeToEnergy.png')
 
     return time_to_energy_params, prediction_params
 
@@ -572,7 +656,7 @@ if __name__ == '__main__':
      params_tof_prediction) = make_tof_to_energy_matrix(
         energy_scale_eV=energy_scale, plot=True, verbose=2)
 
-    h5 = process.load_file('h5_files/run117_all.h5', verbose=1)
+    h5 = process.load_file('h5_files/run118_all.h5', verbose=1)
     process.list_hdf5_content(h5)
     raw = h5['raw']
     time_scale = raw['time_scale'][:]
