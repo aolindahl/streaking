@@ -38,14 +38,14 @@ def plot_tree(run, ax, title=None, draw=False):
 
         if title is not None:
             ax_i.set_title(title)
-    
+
         if draw:
             ax_i.figure.canvas.draw()
 
     return hist, c_ax, w_ax
 
 if __name__ == '__main__':
-    n_rows, n_cols = 2, 4
+    n_rows, n_cols = 2, 6
     trees = plt.figure('trees')
     fig_name = trees.get_label()
     fig_size = trees.get_size_inches()
@@ -55,11 +55,12 @@ if __name__ == '__main__':
                                          num=fig_name,
                                          figsize=fig_size)
 
-    runs = [112, 113, 115, 114, 118, 117, 109, 108]
+    runs = [112, 113, 115, 114, 118, 117, 109, 108, 100, 101, 102]
     ax_indexes = [(0, 0), (1, 0),
                   (0, 1), (1, 1),
                   (0, 2), (1, 2),
-                  (0, 3), (1, 3)]
+                  (0, 3), (1, 3),
+                  (0, 5), (1, 4), (1, 5)]
     names = ['run 112: 4 fs reference, foil at -4996 um',
              'run 113: 4 fs streaked',
              'run 115: reference, foil at -4007 um',
@@ -67,7 +68,10 @@ if __name__ == '__main__':
              'run 118: reference, foil at -4007 um',
              'run 117: streaked',
              'run 109: reference, foil out',
-             'run 108: streaked']
+             'run 108: streaked',
+             'run 100: reference, -4000 um, short',
+             'run 101: -4000 um, short',
+             'run 102: -4000 um, short']
 
     for run, ax_index, name in zip(runs, ax_indexes, names):
         plot_tree(run, trees_ax_array[ax_index], name)
@@ -111,7 +115,7 @@ if __name__ == '__main__':
 #    for ax in trees_ax_array[:-1, :].flatten():
 #        plt.setp(ax.get_xticklabels(), visible=False)
 
-    trees.tight_layout()
+#    trees.tight_layout()
 
     for fmt in ['pdf', 'png']:
         trees.savefig('.'.join(['figures/cristmas_trees', fmt]))
