@@ -12,10 +12,12 @@ import time
 import os
 import sys
 import lmfit
+import warnings
 
 from aolPyModules import wiener, wavelet_filter
 import time_to_energy_conversion as tof_to_energy
 from aolPyModules import plotting as aol_plotting
+import area_fill
 
 prompt_roi = [1.508, 1.535]
 streak_time_roi = [1.57, 1.66]
@@ -88,6 +90,18 @@ def older(dset, dset_list):
 class Timer_object:
     def __init__(self, t):
         self.attrs = {'time_stamp': t}
+
+
+class Tims_stamp_warning(Warning):
+    pass
+
+
+def time_stamp_object(h5_object):
+    try:
+        h5_object.attrs['time_stamp'] = time.time()
+    except:
+        warnings.warn('Could not time stamp the object {}.'.format(
+            repr(h5_object)))
 
 
 def get_response(plot=False, verbose=0):
@@ -484,6 +498,7 @@ def update_run_contained_derived_data(file_name, plot=False, verbose=0):
     pct_filter_dset = make_dataset(h5, 'pct_filter', (n_events, ),
                                    dtype=bool)
     if older(pct_filter_dset, [raw_group, Timer_object(0)]):
+        print h5.filename
         pct0 = raw_group['phase_cavity_times'][:, 0]
         pct_filter_dset[:] = (0.4 < pct0) & (pct0 < 1.2)
         pct_filter_dset.attrs[time_stamp] = time.time()
@@ -707,7 +722,7 @@ def update_with_time_to_energy_conversion(file_name, plot=False, verbose=0):
 
 #            spectral_com_dset[i_evt] = (np.sum(peak_scale * peak_trace) /
 #                                        np.sum(peak_trace))
-            if len(peak_trace) > 0:
+            if len(peak_trace) > 3:
                 out = model.fit(peak_trace, x=peak_scale,
                                 center=center, sigma=width/4,
                                 amplitude=peak_trace.max() * width / 2)
@@ -742,13 +757,30 @@ def update_with_time_to_energy_conversion(file_name, plot=False, verbose=0):
             th = spectral_threshold_dset[shot]
             ax.plot([c-w/2, c+w/2], [th] * 2)
 
+    # Calculate main photoline area
+    main_photoline_area = make_dataset(spectral_properties_group,
+                                       'main_photoline_area', (n_events, ))
+
+    if older(main_photoline_area, energy_trace_dset):
+        if verbose:
+            print 'Computing photoline area'
+        e_scale = energy_scale_dset.value
+        dE = np.mean(np.diff(e_scale))
+        e_slice = slice(np.searchsorted(e_scale, 55), None)
+        for i_evt in range(n_events):
+            raw_A, _ = area_fill.zero_crossing_area(
+                energy_trace_dset[i_evt, e_slice])
+            main_photoline_area[i_evt] = raw_A * dE
+            update_progress(i_evt, n_events, verbose)
+        time_stamp_object(main_photoline_area)
+
     ##########
     # Calculate electron energy prediction
     e_energy_prediction_params_group = make_group(h5,
                                                   'e_energy_prediction_params')
 
     if older(e_energy_prediction_params_group, [spectral_gaussian_center_dset,
-                                                Timer_object(1443456590)]):
+                                                Timer_object(1444931900)]):
         if verbose > 0:
             print 'Fit the electron energy prediction parameters.',
             print 'In "update_with_time_to_energy_conversion()"',
@@ -771,11 +803,15 @@ def update_with_time_to_energy_conversion(file_name, plot=False, verbose=0):
         prediction_params = \
             tof_to_energy.e_energy_prediction_model_start_params(**var_dict)
 
-        res = lmfit.minimize(tof_to_energy.e_energy_prediction_model,
-                             prediction_params,
-                             kws=var_dict)
+        try:
+            res = lmfit.minimize(tof_to_energy.e_energy_prediction_model,
+                                 prediction_params,
+                                 kws=var_dict)
+            fit_worked = True
+        except:
+            fit_worked = False
 
-        if verbose > 0:
+        if verbose > 0 and fit_worked:
             print '\nPrediction params:'
             lmfit.report_fit(res)
 
@@ -783,7 +819,7 @@ def update_with_time_to_energy_conversion(file_name, plot=False, verbose=0):
         for k, v in prediction_params.iteritems():
             d = e_energy_prediction_params_group.require_dataset(
                 k, (), np.float)
-            d[()] = v.value
+            d[()] = v.value if fit_worked else np.nan
 
         # Remove old parameters that should not be there
         for k in set(e_energy_prediction_params_group.keys()).difference(
@@ -842,7 +878,9 @@ def update_with_energy_prediction(file_name, plot=False, verbose=0):
     prediction_map = {'117': 'h5_files/run118_all.h5',
                       '114': 'h5_files/run115_all.h5',
                       '113': 'h5_files/run112_all.h5',
-                      '108': 'h5_files/run109_all.h5'}
+                      '108': 'h5_files/run109_all.h5',
+                      '101': 'h5_files/run100_all.h5',
+                      '102': 'h5_files/run100_all.h5'}
 
     pe_energy_prediction_dset = make_dataset(
         h5, 'photoelectron_energy_prediction_eV', (n_events,))
@@ -868,7 +906,7 @@ def update_with_energy_prediction(file_name, plot=False, verbose=0):
                                          fee_dset,
                                          energy_BC2_dset,
                                          raw_group,
-                                         Timer_object(1443457990)]):
+                                         Timer_object(1444981500)]):
 
         if verbose > 0:
             print 'Updating energy prediction.',
@@ -884,8 +922,12 @@ def update_with_energy_prediction(file_name, plot=False, verbose=0):
             'fee': fee_dset.value
             }
 
-        pe_energy_prediction_dset[:] = tof_to_energy.e_energy_prediction_model(
-            prediction_params, **var_dict)
+        try:
+            pe_energy_prediction_dset[:] = \
+                tof_to_energy.e_energy_prediction_model(prediction_params,
+                                                        **var_dict)
+        except:
+            pe_energy_prediction_dset[:] = np.nan
 
         pe_energy_prediction_dset.attrs[time_stamp] = time.time()
 
@@ -912,19 +954,26 @@ def update_with_energy_prediction(file_name, plot=False, verbose=0):
                                        spectral_width_dset,
                                        pe_energy_prediction_dset,
                                        pct_filter_dset,
-                                       Timer_object(1443603690)]):
+                                       Timer_object(2444203160)]):
         if verbose > 0:
             print 'Making the christmas tree plot.',
             print ' In "update_with_energy_prediction()"',
             print ' with {}'.format(file_name)
         spectral_width_axis_dset[:] = np.linspace(0, 35, n_spectral_width_bins)
         spectral_width_axis_dset.attrs['time_stamp'] = time.time()
-        spectral_center_axis_dset[:] = np.linspace(-12, 12,
+        spectral_center_axis_dset[:] = np.linspace(-20, 20,
                                                    n_spectral_center_bins)
         spectral_center_axis_dset.attrs['time_stamp'] = time.time()
 
-        I = pct_filter_dset.value & (-0.1 <
-                                     raw_group['phase_cavity_times'][:, 1])
+#        I = (pct_filter_dset.value &
+#             (-0.1 < raw_group['phase_cavity_times'][:, 1]) &
+##             (raw_group['phase_cavity_times'][:, 1] < 0.05) &
+##             (0.75 < raw_group['phase_cavity_times'][:, 0]) &
+##             (raw_group['phase_cavity_times'][:, 0] < 0.85) &
+#             (0.065 < raw_group['power_meter_V'].value) &
+#             (raw_group['power_meter_V'].value < 0.1))
+
+        I = np.ones(pct_filter_dset.shape, dtype=bool)
 
         hist = aol_plotting.center_histogram_2d(
             spectral_center_dset[I] - pe_energy_prediction_dset[I],
@@ -1127,3 +1176,23 @@ if __name__ == '__main__':
         ax2.plot(energy_scale - pe_energy_dset[shot],
                  energy_signal_dset[shot, :] + dy * i)
     ax2.set_xlim(-20, 25)
+
+# %%
+    # Plot the photoline area
+    plt.figure('photoline area')
+    plt.clf()
+
+    spectral_properties_group = h5['spectral_properties']
+    main_photoline_area = spectral_properties_group[
+        'main_photoline_area'].value
+    fee = h5['fee_mean'].value
+    I = np.isfinite(main_photoline_area) & np.isfinite(fee)
+    p = np.polyfit(fee[I], main_photoline_area[I], 2)
+    fee_ax = np.linspace(min(fee[I]), max(fee[I]), 2**5)
+
+    plt.subplot(121)
+    plt.plot(fee, main_photoline_area, '.')
+    plt.plot(fee_ax, np.polyval(p, fee_ax), 'r')
+    plt.subplot(122)
+    plt.hist2d(fee[I], main_photoline_area[I], bins=2**7)
+    plt.plot(fee_ax, np.polyval(p, fee_ax), 'r')
